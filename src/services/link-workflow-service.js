@@ -29,9 +29,13 @@ export class LinkWorkflowService {
     this.logger = logger;
   }
 
-  async process(requestId, event) {
+  async process(requestId, event, context = {}) {
+    const correlationId = context.correlationId ?? null;
     try {
-      this.auditLogRepository.log(requestId, "info", "processing_started", "Processing inbound ClickUp message.", event.toJSON());
+      this.auditLogRepository.log(requestId, "info", "processing_started", "Processing inbound ClickUp message.", {
+        correlationId,
+        ...event.toJSON()
+      });
 
       if (!this.rateLimiter.allows(event)) {
         await this.clickUpChatService.postMessage(event.channelId, this.messageFormatter.formatRateLimit(), event.threadMessageId);
@@ -158,11 +162,14 @@ export class LinkWorkflowService {
     } catch (error) {
       this.logger.error("Link workflow failed.", {
         requestId,
+        correlationId,
         deliveryKey: event.deliveryKey,
         error: error.message
       });
 
-      this.auditLogRepository.log(requestId, "error", "workflow_failed", error.message);
+      this.auditLogRepository.log(requestId, "error", "workflow_failed", error.message, {
+        correlationId
+      });
       this.requestRepository.update(requestId, {
         status: "failed",
         error_code: "workflow_failed",
@@ -174,6 +181,7 @@ export class LinkWorkflowService {
       } catch (secondaryError) {
         this.logger.warning("Unable to post failure response to ClickUp.", {
           requestId,
+          correlationId,
           error: secondaryError.message
         });
       }

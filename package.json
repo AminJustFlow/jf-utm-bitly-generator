@@ -5,12 +5,13 @@
   "type": "module",
   "description": "Node.js port of the JF Link Generator Bot for ClickUp Chat.",
   "engines": {
-    "node": ">=25.0.0"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node ./bin/server.js",
     "dev": "node --watch ./bin/server.js",
     "migrate": "node ./bin/migrate.js",
-    "test": "node ./tests/run.js"
+    "test": "node ./tests/run.js",
+    "debug:webhook": "node ./scripts/debug-webhook.js"
   }
 }

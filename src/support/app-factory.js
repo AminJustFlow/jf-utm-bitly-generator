@@ -57,8 +57,8 @@ export async function createApplication(projectRoot) {
   const openAIParser = new OpenAIParserService(httpClient, config.openai, rulesService);
   const linkRequestParser = new LinkRequestParser(commandParser, openAIParser, heuristicParser, logger);
   const requestNormalizer = new RequestNormalizer(rulesService, urlService, config.app.confidenceThreshold);
-  const payloadMapper = new ClickUpPayloadMapper(config.clickup);
-  const webhookVerifier = new WebhookVerifier(config.clickup);
+  const payloadMapper = new ClickUpPayloadMapper(config.clickup, logger);
+  const webhookVerifier = new WebhookVerifier(config.clickup, logger);
   const rateLimiter = new RateLimiter(requestRepository, config.app.rateLimit, config.app.rateWindowSeconds);
   const bitlyService = new BitlyService(httpClient, config.bitly);
   const qrCodeService = new QrCodeService(config.qr);
@@ -80,19 +80,27 @@ export async function createApplication(projectRoot) {
   });
 
   const healthController = new HealthController(database);
-  const debugController = new DebugController(config.app.debug, path.join(projectRoot, "tests", "fixtures", "clickup-chat-webhook.json"));
+  const debugController = new DebugController({
+    debugEnabled: config.app.debug || config.clickup.debugWebhook,
+    fixtureDirectory: path.join(projectRoot, "tests", "fixtures"),
+    defaultFixture: "clickup-chat-message.json",
+    config
+  });
   const clickUpWebhookController = new ClickUpWebhookController({
     payloadMapper,
     webhookVerifier,
     requestRepository,
     auditLogRepository,
     workflowService,
-    logger
+    logger,
+    debugEnabled: config.app.debug || config.clickup.debugWebhook
   });
 
   const router = new Router();
   router.add("GET", "/health", (request) => healthController.handle(request));
-  router.add("GET", "/debug/sample-payload", (request) => debugController.handle(request));
+  router.add("GET", "/debug/sample-payload", (request) => debugController.handleSample(request));
+  router.add("GET", "/debug/webhook-info", (request) => debugController.handleInfo(request));
+  router.add("POST", "/debug/webhook-echo", (request) => debugController.handleEcho(request));
   router.add("POST", "/webhooks/clickup/chat", (request) => clickUpWebhookController.handle(request));
 
   return new Application(router, migrationRunner, config);
@@ -131,6 +139,10 @@ function resolveConfig(projectRoot) {
       allowedChannelIds: csv(process.env.CLICKUP_ALLOWED_CHANNEL_IDS ?? process.env.CLICKUP_CHAT_CHANNEL_ID ?? ""),
       webhookSecret: process.env.CLICKUP_WEBHOOK_SECRET ?? baseConfig.clickup.webhookSecret,
       signatureHeader: process.env.CLICKUP_SIGNATURE_HEADER ?? baseConfig.clickup.signatureHeader,
+      debugWebhook: parseBoolean(process.env.DEBUG_WEBHOOK, baseConfig.clickup.debugWebhook),
+      debugSkipSignature: parseBoolean(process.env.DEBUG_WEBHOOK_SKIP_SIGNATURE, baseConfig.clickup.debugSkipSignature),
+      debugSkipChannelCheck: parseBoolean(process.env.DEBUG_WEBHOOK_SKIP_CHANNEL_CHECK, baseConfig.clickup.debugSkipChannelCheck),
+      debugSkipWorkspaceCheck: parseBoolean(process.env.DEBUG_WEBHOOK_SKIP_WORKSPACE_CHECK, baseConfig.clickup.debugSkipWorkspaceCheck),
       apiBase: process.env.CLICKUP_API_BASE_URL ?? baseConfig.clickup.apiBase,
       messageContentField: process.env.CLICKUP_CHAT_MESSAGE_CONTENT_FIELD ?? baseConfig.clickup.messageContentField,
       messageFallbackField: process.env.CLICKUP_CHAT_MESSAGE_FALLBACK_FIELD ?? baseConfig.clickup.messageFallbackField,

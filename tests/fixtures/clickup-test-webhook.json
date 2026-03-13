@@ -1,0 +1,7 @@
+{
+  "webhook_id": "wh_test_001",
+  "event": "webhook_test",
+  "workspace_id": "901234",
+  "channel_id": "456789",
+  "note": "Best-effort example of a generic ClickUp test webhook payload. Replace this with a real captured payload from your workspace if ClickUp sends something different."
+}

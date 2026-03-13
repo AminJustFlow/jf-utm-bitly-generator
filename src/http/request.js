@@ -34,6 +34,40 @@ export class NodeRequest {
     return this.rawBody ? decodeJson(this.rawBody) : {};
   }
 
+  parseJson() {
+    const trimmed = String(this.rawBody ?? "").trim();
+    if (!trimmed) {
+      return {
+        ok: false,
+        errorCode: "missing_body",
+        errorMessage: "Expected a JSON payload."
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {
+          ok: false,
+          errorCode: "unsupported_payload_shape",
+          errorMessage: "Expected a JSON object payload."
+        };
+      }
+
+      return {
+        ok: true,
+        value: parsed
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        errorCode: "invalid_json",
+        errorMessage: "Request body was not valid JSON.",
+        parseError: error.message
+      };
+    }
+  }
+
   header(name, defaultValue = null) {
     return this.headers[String(name).toLowerCase()] ?? defaultValue;
   }

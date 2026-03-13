@@ -1,15 +1,39 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import rules from "../config/rules.js";
 import { RulesService } from "../src/services/rules-service.js";
 import { UrlService } from "../src/services/url-service.js";
 import { FingerprintService } from "../src/services/fingerprint-service.js";
 import { RequestNormalizer } from "../src/services/request-normalizer.js";
 import { ParsedLinkRequest } from "../src/domain/parsed-link-request.js";
+import { ClickUpPayloadMapper } from "../src/services/clickup-payload-mapper.js";
+import { WebhookVerifier } from "../src/services/webhook-verifier.js";
 
 const rulesService = new RulesService(rules);
 const urlService = new UrlService();
 const fingerprintService = new FingerprintService();
 const normalizer = new RequestNormalizer(rulesService, urlService, 0.72);
+const nullLogger = {
+  debug() {},
+  info() {},
+  warning() {},
+  error() {}
+};
+const payloadMapper = new ClickUpPayloadMapper({
+  workspaceId: "901234",
+  defaultChannelId: "456789",
+  debugWebhook: true
+}, nullLogger);
+const webhookVerifier = new WebhookVerifier({
+  webhookSecret: "test-secret",
+  signatureHeader: "X-Signature",
+  workspaceId: "901234",
+  allowedChannelIds: ["456789"],
+  debugWebhook: true,
+  debugSkipSignature: false,
+  debugSkipChannelCheck: false,
+  debugSkipWorkspaceCheck: false
+}, nullLogger);
 
 const tests = [
   {
@@ -113,6 +137,81 @@ const tests = [
 
       assert.equal(decision.status, "clarify");
       assert.ok(decision.missingFields.includes("client") || decision.missingFields.includes("channel"));
+    }
+  },
+  {
+    name: "clickup payload mapper identifies chat message payload shape",
+    run() {
+      const payload = JSON.parse(fs.readFileSync(new URL("./fixtures/clickup-chat-message.json", import.meta.url), "utf8"));
+      const result = payloadMapper.map(payload, { correlationId: "test-correlation" });
+
+      assert.equal(result.diagnostics.payloadShape, "message");
+      assert.equal(result.event.workspaceId, "901234");
+      assert.equal(result.event.channelId, "456789");
+      assert.equal(result.event.messageText, "Need an Instagram link for Studleys spring sale to https://studleys.com/perennials");
+    }
+  },
+  {
+    name: "clickup test webhook fixture fails with explicit missing message code",
+    run() {
+      const payload = JSON.parse(fs.readFileSync(new URL("./fixtures/clickup-test-webhook.json", import.meta.url), "utf8"));
+      let caught = null;
+
+      try {
+        payloadMapper.map(payload, { correlationId: "test-correlation" });
+      } catch (error) {
+        caught = error;
+      }
+
+      assert.ok(caught);
+      assert.equal(caught.code, "missing_message_text");
+    }
+  },
+  {
+    name: "signature debug skip allows manual webhook tests without signature header",
+    run() {
+      const verifier = new WebhookVerifier({
+        webhookSecret: "test-secret",
+        signatureHeader: "X-Signature",
+        workspaceId: "901234",
+        allowedChannelIds: ["456789"],
+        debugWebhook: true,
+        debugSkipSignature: true,
+        debugSkipChannelCheck: false,
+        debugSkipWorkspaceCheck: false
+      }, nullLogger);
+
+      const verification = verifier.verify({
+        header() {
+          return null;
+        }
+      }, {
+        workspaceId: "901234",
+        channelId: "456789"
+      }, {}, { correlationId: "test-correlation" });
+
+      assert.equal(verification.passed, true);
+      assert.ok(verification.diagnostics.bypasses.includes("signature"));
+    }
+  },
+  {
+    name: "signature mismatch remains an explicit verifier error",
+    run() {
+      const verification = webhookVerifier.verify({
+        header(name) {
+          if (name === "x-signature") {
+            return "wrong-secret";
+          }
+
+          return null;
+        }
+      }, {
+        workspaceId: "901234",
+        channelId: "456789"
+      }, {}, { correlationId: "test-correlation" });
+
+      assert.equal(verification.passed, false);
+      assert.equal(verification.reasons[0].code, "invalid_signature");
     }
   }
 ];

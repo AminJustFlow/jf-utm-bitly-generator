@@ -4,7 +4,7 @@ This is the Node.js port of the internal JF Link Generator Bot for ClickUp Chat.
 
 ## Stack
 
-- Node.js 25+
+- Node.js 22.x
 - Native `fetch`
 - Native `node:sqlite`
 - No framework
@@ -51,10 +51,12 @@ ndoejsapp/
 
 ## Requirements
 
-- Node.js 25+
+- Node.js 22.x
 - OpenAI API key
 - ClickUp API token
 - Bitly access token
+
+Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, which was introduced in Node 22 and required an experimental flag in earlier 22.x minors.
 
 ## Local Setup
 
@@ -151,12 +153,16 @@ ndoejsapp/
 
 - `GET /health`
 - `GET /debug/sample-payload`
-  - only when `APP_DEBUG=true`
+  - only when `APP_DEBUG=true` or `DEBUG_WEBHOOK=true`
+- `GET /debug/webhook-info`
+  - only when `APP_DEBUG=true` or `DEBUG_WEBHOOK=true`
+- `POST /debug/webhook-echo`
+  - only when `APP_DEBUG=true` or `DEBUG_WEBHOOK=true`
 - `POST /webhooks/clickup/chat`
 
 ## ClickUp Payload Mapping
 
-ClickUp Chat webhook payloads can vary. The mapping is isolated in [`src/services/clickup-payload-mapper.js`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/src/services/clickup-payload-mapper.js), and the sample fixture lives at [`tests/fixtures/clickup-chat-webhook.json`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/tests/fixtures/clickup-chat-webhook.json).
+ClickUp Chat webhook payloads can vary. The mapping is isolated in [`src/services/clickup-payload-mapper.js`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/src/services/clickup-payload-mapper.js), and the sample fixtures live under `tests/fixtures/`.
 
 Recommended first-run process:
 
@@ -192,9 +198,10 @@ Covered cases:
 
 ## Manual Testing Assets
 
-- Sample payload: [`tests/fixtures/clickup-chat-webhook.json`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/tests/fixtures/clickup-chat-webhook.json)
+- Sample payloads: `tests/fixtures/clickup-chat-message.json`, `tests/fixtures/clickup-test-webhook.json`
 - Curl examples: [`docs/CURL_EXAMPLES.md`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/docs/CURL_EXAMPLES.md)
 - Postman collection: [`docs/postman_collection.json`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/docs/postman_collection.json)
+- Debug guide: [`DEBUG_WEBHOOK.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/DEBUG_WEBHOOK.md)
 
 ## Failure Modes
 
