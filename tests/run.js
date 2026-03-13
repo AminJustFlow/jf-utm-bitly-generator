@@ -704,7 +704,7 @@ const tests = [
                 destinationUrl: "https://studleys.com/garden-plants/",
                 finalLongUrl: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=",
                 shortUrl: "https://bit.ly/3NCDteq",
-                qrUrl: "",
+                qrUrl: "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=https%3A%2F%2Fbit.ly%2F3NCDteq",
                 originalMessage: "Need a LinkedIn link",
                 warnings: [],
                 requestCount: 3,
@@ -750,6 +750,8 @@ const tests = [
       assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
       assert.match(htmlResponse.body, /UTM Library/iu);
       assert.match(htmlResponse.body, /spring_sale/iu);
+      assert.match(htmlResponse.body, /QR Preview/iu);
+      assert.match(htmlResponse.body, /create-qr-code/iu);
       assert.equal(csvResponse.statusCode, 200);
       assert.match(csvResponse.headers["Content-Type"], /text\/csv/iu);
       assert.match(csvResponse.body, /request_id,status,client/i);
