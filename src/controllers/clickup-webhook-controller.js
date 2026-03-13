@@ -142,6 +142,18 @@ export class ClickUpWebhookController {
         }, 200, this.responseHeaders(correlationId));
       }
 
+      if (this.shouldIgnoreBotResponse(event.messageText)) {
+        this.logger.info("ClickUp webhook ignored because the message matches the bot response format.", {
+          ...baseContext,
+          preview: String(event.messageText ?? "").slice(0, 120)
+        });
+        return NodeResponse.json({
+          status: "ignored",
+          reason: "bot_response_loop_prevented",
+          correlation_id: correlationId
+        }, 200, this.responseHeaders(correlationId));
+      }
+
       const existing = this.requestRepository.findByDeliveryKey(event.deliveryKey);
       if (existing) {
         if (this.shouldRetryExistingRequest(existing)) {
@@ -298,5 +310,27 @@ export class ClickUpWebhookController {
 
   shouldRetryExistingRequest(existing) {
     return ["failed", "completed_without_short_link"].includes(String(existing.status ?? "").trim().toLowerCase());
+  }
+
+  shouldIgnoreBotResponse(messageText) {
+    const text = String(messageText ?? "").trim();
+    if (!text) {
+      return false;
+    }
+
+    const normalized = text.toLowerCase();
+    const isStructuredSuccess = normalized.includes("client:")
+      && normalized.includes("channel:")
+      && normalized.includes("utm:")
+      && normalized.includes("short link:");
+    if (isStructuredSuccess) {
+      return true;
+    }
+
+    return [
+      "i hit an internal error while generating this link.",
+      "too many requests came from this user in a short window",
+      "i was not confident enough to generate a tracked link from that message."
+    ].some((phrase) => normalized.includes(phrase));
   }
 }

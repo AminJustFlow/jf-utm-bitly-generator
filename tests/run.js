@@ -470,6 +470,95 @@ const tests = [
     }
   },
   {
+    name: "bot-formatted response messages are ignored to prevent loops",
+    async run() {
+      const controller = new ClickUpWebhookController({
+        payloadMapper: {
+          map() {
+            return {
+              event: {
+                deliveryKey: "bot-loop-1",
+                workspaceId: "901234",
+                channelId: "456789",
+                messageId: "msg-1",
+                threadMessageId: null,
+                userId: null,
+                userName: null,
+                messageText: [
+                  "Client: Studleys",
+                  "Channel: LinkedIn",
+                  "Source: LinkedIn",
+                  "Medium: Social",
+                  "Campaign: spring_sale",
+                  "",
+                  "UTM:",
+                  "https://studleys.com/garden-plants/?utm_source=LinkedIn",
+                  "",
+                  "Short Link:",
+                  "https://bit.ly/test"
+                ].join("\n"),
+                toJSON() {
+                  return {};
+                }
+              },
+              diagnostics: {
+                payloadShape: "mixed",
+                messageTextFound: true,
+                workspaceIdFoundInPayload: true,
+                channelIdFoundInPayload: true,
+                workspaceIdResolved: "901234",
+                channelIdResolved: "456789"
+              }
+            };
+          }
+        },
+        webhookVerifier: {
+          verify() {
+            return { passed: true, reasons: [], diagnostics: {} };
+          },
+          shouldIgnore() {
+            return false;
+          }
+        },
+        requestRepository: {
+          findByDeliveryKey() {
+            throw new Error("requestRepository should not be reached for bot loop messages");
+          }
+        },
+        auditLogRepository: {
+          log() {}
+        },
+        workflowService: {
+          async process() {}
+        },
+        logger: nullLogger,
+        debugEnabled: false
+      });
+
+      const response = await controller.handle({
+        method: "POST",
+        path: "/webhooks/clickup/chat",
+        query: {},
+        rawBody: "{\"ok\":true}",
+        headers: {},
+        parseJson() {
+          return {
+            ok: true,
+            value: { ok: true }
+          };
+        },
+        header() {
+          return null;
+        }
+      });
+
+      const body = JSON.parse(response.body);
+      assert.equal(response.statusCode, 200);
+      assert.equal(body.status, "ignored");
+      assert.equal(body.reason, "bot_response_loop_prevented");
+    }
+  },
+  {
     name: "utm library service lists unique tracked links with request counts",
     run() {
       const database = new DatabaseSync(":memory:");
