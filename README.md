@@ -1,6 +1,6 @@
 # JF Link Generator Bot Node
 
-This is the Node.js port of the internal JF Link Generator Bot for ClickUp Chat. A teammate posts a natural-language request in a dedicated ClickUp Chat channel, the backend parses it into a strict schema, applies deterministic JF tracking rules, creates the canonical UTM URL, shortens it with Bitly, optionally creates a QR code URL, and posts the result back into the same Chat channel.
+This is the Node.js port of the internal JF Link Generator Bot for ClickUp Chat. A teammate posts a natural-language request in a dedicated ClickUp Chat channel, the backend parses it into a strict schema, applies deterministic JF tracking rules, creates a five-field UTM URL, shortens it with Bitly, optionally creates a QR code URL, and posts the result back into the same Chat channel.
 
 ## Stack
 
@@ -19,7 +19,7 @@ This is the Node.js port of the internal JF Link Generator Bot for ClickUp Chat.
    - strict fallback command parsing first
    - OpenAI Responses API structured JSON second
    - heuristic parsing as a fallback
-5. Applies deterministic client, channel, alias, campaign, and UTM rules in Node.
+5. Applies deterministic client, channel, alias, campaign, and five-field UTM rules in Node.
 6. Reuses an existing short link when the normalized fingerprint already exists.
 7. Calls Bitly when a new short link is needed.
 8. Generates a QR image URL when the request implies offline or QR usage.
@@ -152,6 +152,12 @@ Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, whi
 ## Endpoints
 
 - `GET /health`
+- `GET /utms`
+  - read-only HTML library of unique tracked links with filters and pagination
+- `GET /utms.json`
+  - JSON export of the current filtered library view
+- `GET /utms.csv`
+  - CSV export of the current filtered library view
 - `GET /debug/sample-payload`
   - only when `APP_DEBUG=true` or `DEBUG_WEBHOOK=true`
 - `GET /debug/webhook-info`
@@ -190,8 +196,8 @@ node ./tests/run.js
 Covered cases:
 
 - alias normalization
-- campaign slug generation
-- UTM generation with existing query params
+- campaign fallback generation
+- five-field UTM generation with existing query params
 - duplicate fingerprint generation
 - clarification branching
 - unsupported client/channel handling
@@ -202,6 +208,20 @@ Covered cases:
 - Curl examples: [`docs/CURL_EXAMPLES.md`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/docs/CURL_EXAMPLES.md)
 - Postman collection: [`docs/postman_collection.json`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/docs/postman_collection.json)
 - Debug guide: [`DEBUG_WEBHOOK.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/DEBUG_WEBHOOK.md)
+
+## UTM Library
+
+The app now exposes a read-only UTM library at `/utms`. It shows one row per unique fingerprinted tracked link, not one row per duplicate request, so teammates can browse the real library instead of raw webhook history.
+
+Supported query params:
+
+- `search`
+- `client`
+- `channel`
+- `campaign`
+- `status`
+- `page`
+- `per_page`
 
 ## Failure Modes
 

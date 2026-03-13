@@ -1,4 +1,5 @@
 import { LinkGenerationResult } from "../domain/link-generation-result.js";
+import { BitlyError } from "./bitly-service.js";
 
 export class LinkWorkflowService {
   constructor({
@@ -106,11 +107,14 @@ export class LinkWorkflowService {
         return;
       }
 
-      const bitly = await this.bitlyService.shorten(normalized.finalLongUrl);
-      const qrUrl = normalized.needsQr ? this.qrCodeService.generateUrl(bitly.link || normalized.finalLongUrl) : null;
+      let bitly;
+      let qrUrl = null;
+      let result;
       const timestamp = new Date().toISOString();
 
       try {
+        bitly = await this.bitlyService.shorten(normalized.finalLongUrl);
+        qrUrl = normalized.needsQr ? this.qrCodeService.generateUrl(bitly.link || normalized.finalLongUrl) : null;
         this.generatedLinkRepository.create({
           fingerprint,
           client: normalized.client,
@@ -127,15 +131,52 @@ export class LinkWorkflowService {
           updatedAt: timestamp
         });
       } catch (error) {
+        if (this.shouldDegradeBitlyFailure(error)) {
+          const degradedWarnings = [
+            ...new Set([
+              ...normalized.warnings,
+              "Bitly monthly quota was reached, so no short link was created."
+            ])
+          ];
+          normalized.warnings = degradedWarnings;
+          qrUrl = normalized.needsQr ? this.qrCodeService.generateUrl(normalized.finalLongUrl) : null;
+          result = new LinkGenerationResult({
+            fingerprint,
+            longUrl: normalized.finalLongUrl,
+            shortUrl: null,
+            qrUrl,
+            reusedExisting: false,
+            bitlyMetadata: error.responseBody ?? {},
+            shortLinkAvailable: false
+          });
+
+          const response = await this.clickUpChatService.postMessage(
+            event.channelId,
+            this.messageFormatter.formatSuccess(normalized, result),
+            event.threadMessageId
+          );
+
+          this.requestRepository.update(requestId, {
+            status: "completed_without_short_link",
+            qr_url: qrUrl,
+            warnings: degradedWarnings,
+            error_code: "bitly_quota_reached",
+            error_message: error.message,
+            response_message_id: response.id ?? response.message?.id ?? null
+          });
+          return;
+        }
+
         const raceExisting = this.generatedLinkRepository.findByFingerprint(fingerprint);
         if (!raceExisting) {
           throw error;
         }
 
         bitly.link = raceExisting.short_url;
+        qrUrl = raceExisting.qr_url ?? (normalized.needsQr ? this.qrCodeService.generateUrl(bitly.link || normalized.finalLongUrl) : null);
       }
 
-      const result = new LinkGenerationResult({
+      result = new LinkGenerationResult({
         fingerprint,
         longUrl: normalized.finalLongUrl,
         shortUrl: bitly.link,
@@ -186,5 +227,11 @@ export class LinkWorkflowService {
         });
       }
     }
+  }
+
+  shouldDegradeBitlyFailure(error) {
+    return error instanceof BitlyError
+      && error.statusCode === 429
+      && error.code === "MONTHLY_ENCODE_LIMIT_REACHED";
   }
 }

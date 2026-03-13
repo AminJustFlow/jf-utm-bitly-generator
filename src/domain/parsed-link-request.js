@@ -4,6 +4,11 @@ export class ParsedLinkRequest {
     channel = null,
     assetType = null,
     campaignLabel = null,
+    utmSource = null,
+    utmMedium = null,
+    utmCampaign = null,
+    utmTerm = null,
+    utmContent = null,
     destinationUrl = null,
     needsQr = false,
     confidence = 0,
@@ -16,6 +21,11 @@ export class ParsedLinkRequest {
     this.channel = channel;
     this.assetType = assetType;
     this.campaignLabel = campaignLabel;
+    this.utmSource = utmSource;
+    this.utmMedium = utmMedium;
+    this.utmCampaign = utmCampaign;
+    this.utmTerm = utmTerm;
+    this.utmContent = utmContent;
     this.destinationUrl = destinationUrl;
     this.needsQr = needsQr;
     this.confidence = confidence;
@@ -31,6 +41,11 @@ export class ParsedLinkRequest {
       channel: data.channel ?? null,
       assetType: data.asset_type ?? data.assetType ?? null,
       campaignLabel: data.campaign_label ?? data.campaignLabel ?? null,
+      utmSource: data.utm_source ?? data.utmSource ?? data.source ?? null,
+      utmMedium: data.utm_medium ?? data.utmMedium ?? data.medium ?? null,
+      utmCampaign: data.utm_campaign ?? data.utmCampaign ?? data.campaign ?? null,
+      utmTerm: data.utm_term ?? data.utmTerm ?? data.term ?? null,
+      utmContent: data.utm_content ?? data.utmContent ?? data.content ?? null,
       destinationUrl: data.destination_url ?? data.destinationUrl ?? null,
       needsQr: Boolean(data.needs_qr ?? data.needsQr ?? false),
       confidence: Number(data.confidence ?? 0),
@@ -47,6 +62,11 @@ export class ParsedLinkRequest {
       channel: this.channel,
       asset_type: this.assetType,
       campaign_label: this.campaignLabel,
+      utm_source: this.utmSource,
+      utm_medium: this.utmMedium,
+      utm_campaign: this.utmCampaign,
+      utm_term: this.utmTerm,
+      utm_content: this.utmContent,
       destination_url: this.destinationUrl,
       needs_qr: this.needsQr,
       confidence: this.confidence,

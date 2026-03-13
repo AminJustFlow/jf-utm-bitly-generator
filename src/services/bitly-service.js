@@ -1,3 +1,13 @@
+export class BitlyError extends Error {
+  constructor(message, { statusCode = null, code = null, responseBody = null } = {}) {
+    super(message);
+    this.name = "BitlyError";
+    this.statusCode = statusCode;
+    this.code = code;
+    this.responseBody = responseBody;
+  }
+}
+
 export class BitlyService {
   constructor(httpClient, config) {
     this.httpClient = httpClient;
@@ -29,7 +39,12 @@ export class BitlyService {
     });
 
     if (response.statusCode >= 400) {
-      throw new Error(`Bitly shorten failed with status ${response.statusCode}: ${response.body}`);
+      const body = response.json();
+      throw new BitlyError(`Bitly shorten failed with status ${response.statusCode}: ${response.body}`, {
+        statusCode: response.statusCode,
+        code: body.message ?? null,
+        responseBody: body
+      });
     }
 
     const body = response.json();

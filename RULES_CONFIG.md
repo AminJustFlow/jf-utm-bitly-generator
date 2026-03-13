@@ -8,8 +8,8 @@ The deterministic tracking rules for the Node app live in [`config/rules.js`](/c
 - channels
 - asset types
 - aliases
-- source and medium mapping
-- campaign naming policy
+- five-field UTM defaults
+- per-client and per-channel overrides
 
 ## Add a New Client
 
@@ -19,7 +19,16 @@ Edit [`config/rules.js`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/n
 newclient: {
   displayName: "New Client",
   aliases: ["new client", "nc"],
-  domains: ["newclient.com"]
+  domains: ["newclient.com"],
+  utmDefaults: {
+    website: {
+      source: "Website",
+      medium: "Website",
+      campaign: "Website",
+      term: "",
+      content: ""
+    }
+  }
 }
 ```
 
@@ -31,32 +40,44 @@ Add:
 podcast: {
   displayName: "Podcast",
   aliases: ["podcast"],
-  source: "podcast",
-  medium: "audio",
   assetType: "offline",
-  requiresQr: false
+  requiresQr: false,
+  utmDefaults: {
+    source: "Podcast",
+    medium: "Audio",
+    campaign: null,
+    term: "",
+    content: ""
+  }
 }
 ```
 
-## Campaign Naming Policy
+## UTM Resolution Policy
 
-The final campaign is generated in Node, not by the model.
+The final UTM set is resolved in Node, not by the model.
 
-Format:
+Precedence for each field:
 
 ```text
-{client}_{yyyy_mm}_{slugified_campaign_label}
+explicit request override
+-> client/channel defaults
+-> channel defaults
+-> generated fallback
 ```
 
-Examples:
+Current fields:
 
-- `studleys_2026_03_spring_sale`
-- `woodstone_2026_03_open_house`
+- `utm_source`
+- `utm_medium`
+- `utm_campaign`
+- `utm_term`
+- `utm_content`
 
-Fallback when no campaign label is present:
+Campaign fallback when nothing explicit or configured is provided:
 
 ```text
-{client}_{yyyy_mm}_{channel}
+slugified campaign label
+or channel name when no label exists
 ```
 
 ## When to Change Code Instead of Config
@@ -72,7 +93,7 @@ Change code when:
 
 - ClickUp payload shape changes
 - duplicate logic changes
-- you want additional UTM fields
+- you want non-standard UTM inference logic
 - you need channel-specific validation beyond basic config
 
 ## After Updating Rules

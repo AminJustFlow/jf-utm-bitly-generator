@@ -1,18 +1,32 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import rules from "../config/rules.js";
+import { HealthController } from "../src/controllers/health-controller.js";
+import { UtmLibraryController } from "../src/controllers/utm-library-controller.js";
 import { RulesService } from "../src/services/rules-service.js";
 import { UrlService } from "../src/services/url-service.js";
 import { FingerprintService } from "../src/services/fingerprint-service.js";
+import { UtmLibraryService } from "../src/services/utm-library-service.js";
 import { RequestNormalizer } from "../src/services/request-normalizer.js";
 import { ParsedLinkRequest } from "../src/domain/parsed-link-request.js";
 import { ClickUpPayloadMapper } from "../src/services/clickup-payload-mapper.js";
 import { WebhookVerifier } from "../src/services/webhook-verifier.js";
+import { HeuristicParser } from "../src/services/heuristic-parser.js";
+import { FallbackCommandParser } from "../src/services/fallback-command-parser.js";
+import { LinkWorkflowService } from "../src/services/link-workflow-service.js";
+import { MessageFormatter } from "../src/services/message-formatter.js";
+import { BitlyError } from "../src/services/bitly-service.js";
+import { ClickUpWebhookController } from "../src/controllers/clickup-webhook-controller.js";
+import { RequestRepository } from "../src/repositories/request-repository.js";
 
 const rulesService = new RulesService(rules);
 const urlService = new UrlService();
 const fingerprintService = new FingerprintService();
 const normalizer = new RequestNormalizer(rulesService, urlService, 0.72);
+const heuristicParser = new HeuristicParser(rulesService);
+const commandParser = new FallbackCommandParser();
 const nullLogger = {
   debug() {},
   info() {},
@@ -40,29 +54,34 @@ const tests = [
     name: "alias normalization",
     run() {
       assert.equal(rulesService.normalizeChannel("ig", null, false), "instagram");
+      assert.equal(rulesService.normalizeChannel("linkdln", null, false), "linkedin");
+      assert.equal(rulesService.normalizeChannel("navigation", "owned", false), "website");
+      assert.equal(rulesService.normalizeClient("studleays"), "studleys");
       assert.equal(rulesService.normalizeClient("guardian angel senior services"), "gas");
     }
   },
   {
-    name: "campaign slug generation",
+    name: "campaign fallback generation",
     run() {
       const campaign = rulesService.buildCampaign("studleys", "instagram", "Spring Sale", new Date("2026-03-13T10:00:00Z"));
       assert.equal(campaign.campaignLabel, "spring_sale");
-      assert.equal(campaign.canonicalCampaign, "studleys_2026_03_spring_sale");
+      assert.equal(campaign.canonicalCampaign, "spring_sale");
     }
   },
   {
-    name: "utm generation with existing query params",
+    name: "utm generation keeps all five fields with existing query params",
     run() {
       const result = urlService.appendUtms("https://studleys.com/perennials?color=red&utm_source=old", {
-        utm_source: "instagram",
-        utm_medium: "social",
-        utm_campaign: "studleys_2026_03_spring_sale"
+        utm_source: "Instagram",
+        utm_medium: "Social",
+        utm_campaign: "SpringSale",
+        utm_term: "",
+        utm_content: "PlantFinder"
       });
 
       assert.equal(
         result,
-        "https://studleys.com/perennials?color=red&utm_campaign=studleys_2026_03_spring_sale&utm_medium=social&utm_source=instagram"
+        "https://studleys.com/perennials?color=red&utm_campaign=SpringSale&utm_content=PlantFinder&utm_medium=Social&utm_source=Instagram&utm_term="
       );
     }
   },
@@ -102,6 +121,112 @@ const tests = [
     }
   },
   {
+    name: "client channel defaults resolve the full five-field UTM set",
+    run() {
+      const decision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "jf",
+        channel: "linkedin",
+        asset_type: "social",
+        campaign_label: "contact",
+        destination_url: "https://justflownh.com/#!/contactus",
+        needs_qr: false,
+        confidence: 0.95,
+        warnings: [],
+        missing_fields: []
+      }));
+
+      assert.equal(decision.status, "ready");
+      assert.equal(decision.normalizedRequest.utmSource, "LinkedIn");
+      assert.equal(decision.normalizedRequest.utmMedium, "Social");
+      assert.equal(decision.normalizedRequest.utmCampaign, "Website");
+      assert.equal(decision.normalizedRequest.utmTerm, "");
+      assert.equal(decision.normalizedRequest.utmContent, "Contact");
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_campaign=Website/iu);
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_content=Contact/iu);
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_term=/iu);
+      assert.match(decision.normalizedRequest.finalLongUrl, /#!\/contactus$/iu);
+    }
+  },
+  {
+    name: "website channel defaults can be customized per client",
+    run() {
+      const decision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "studleys",
+        channel: "website",
+        asset_type: "owned",
+        campaign_label: null,
+        destination_url: "https://plants.studleys.com/12120034/",
+        needs_qr: false,
+        confidence: 0.95,
+        warnings: [],
+        missing_fields: []
+      }));
+
+      assert.equal(decision.status, "ready");
+      assert.equal(decision.normalizedRequest.utmSource, "Navigation");
+      assert.equal(decision.normalizedRequest.utmMedium, "Website");
+      assert.equal(decision.normalizedRequest.utmCampaign, "PlantFinder");
+      assert.equal(decision.normalizedRequest.utmTerm, "");
+      assert.equal(decision.normalizedRequest.utmContent, "PlantFinder");
+    }
+  },
+  {
+    name: "explicit UTM overrides beat defaults",
+    run() {
+      const parsed = commandParser.parse("link | client=castle | channel=domain | source=CastleDining | campaign=Ads | term=WinterLunch | content=Dining | url=https://www.castleintheclouds.org/calendar-of-events/category/winter-lunch/");
+      const decision = normalizer.normalize(parsed);
+
+      assert.equal(decision.status, "ready");
+      assert.equal(decision.normalizedRequest.utmSource, "CastleDining");
+      assert.equal(decision.normalizedRequest.utmMedium, "Domain");
+      assert.equal(decision.normalizedRequest.utmCampaign, "Ads");
+      assert.equal(decision.normalizedRequest.utmTerm, "WinterLunch");
+      assert.equal(decision.normalizedRequest.utmContent, "Dining");
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_source=CastleDining/iu);
+    }
+  },
+  {
+    name: "explicit UTM override typos are corrected to canonical values",
+    run() {
+      const parsed = commandParser.parse("link | client=studleys | channel=linkdln | source=LinkdIn | medium=Socaial | campaign=spriung sale | url=https://studleys.com/garden-plants/");
+      const decision = normalizer.normalize(parsed);
+
+      assert.equal(decision.status, "ready");
+      assert.equal(decision.normalizedRequest.channel, "linkedin");
+      assert.equal(decision.normalizedRequest.utmSource, "LinkedIn");
+      assert.equal(decision.normalizedRequest.utmMedium, "Social");
+      assert.equal(decision.normalizedRequest.utmCampaign, "spring_sale");
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_source=LinkedIn/iu);
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_medium=Social/iu);
+    }
+  },
+  {
+    name: "campaign typo correction removes resolved utm warnings",
+    run() {
+      const decision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "studleys",
+        channel: "linkedin",
+        asset_type: "social",
+        campaign_label: "spriung sale",
+        utm_source: "LinkedIn",
+        utm_medium: "Social",
+        utm_campaign: null,
+        utm_term: "",
+        utm_content: "",
+        destination_url: "https://studleys.com/garden-plants/",
+        needs_qr: false,
+        confidence: 0.9,
+        warnings: ["utm_campaign not specified, left null"],
+        missing_fields: ["utm_campaign"]
+      }));
+
+      assert.equal(decision.status, "ready");
+      assert.equal(decision.normalizedRequest.utmCampaign, "spring_sale");
+      assert.ok(!decision.normalizedRequest.warnings.includes("utm_campaign not specified, left null"));
+      assert.ok(decision.normalizedRequest.warnings.includes('Campaign label corrected to "spring sale".'));
+    }
+  },
+  {
     name: "low confidence clarification branching",
     run() {
       const decision = normalizer.normalize(ParsedLinkRequest.fromObject({
@@ -118,6 +243,550 @@ const tests = [
 
       assert.equal(decision.status, "clarify");
       assert.match(decision.message, /not confident enough/iu);
+    }
+  },
+  {
+    name: "heuristic parser handles the standard natural-language request",
+    run() {
+      const parsed = heuristicParser.parse("Need an Instagram link for Studleys spring sale to https://studleys.com/perennials");
+      const decision = normalizer.normalize(parsed);
+
+      assert.equal(decision.status, "ready");
+      assert.equal(decision.normalizedRequest.client, "studleys");
+      assert.equal(decision.normalizedRequest.channel, "instagram");
+      assert.equal(decision.normalizedRequest.utmCampaign, "spring_sale");
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_source=Instagram/iu);
+      assert.match(decision.normalizedRequest.finalLongUrl, /utm_term=/iu);
+    }
+  },
+  {
+    name: "heuristic parser recognizes channel aliases",
+    run() {
+      const parsed = heuristicParser.parse("Please make an ig link for Studley's spring sale to https://studleys.com/perennials");
+
+      assert.equal(parsed.client, "studleys");
+      assert.equal(parsed.channel, "instagram");
+      assert.equal(parsed.campaignLabel, "spring sale");
+      assert.ok(parsed.confidence >= 0.72);
+    }
+  },
+  {
+    name: "heuristic parser corrects typoed client and channel mentions",
+    run() {
+      const parsed = heuristicParser.parse("Please make an instragram link for studleays spring sale to https://studleys.com/perennials");
+      const decision = normalizer.normalize(parsed);
+
+      assert.equal(parsed.client, "studleys");
+      assert.equal(parsed.channel, "instagram");
+      assert.equal(decision.status, "ready");
+      assert.equal(decision.normalizedRequest.utmCampaign, "spring_sale");
+    }
+  },
+  {
+    name: "bitly monthly quota fallback still returns the long UTM link",
+    async run() {
+      const updates = [];
+      const messages = [];
+      const workflow = new LinkWorkflowService({
+        requestRepository: {
+          update(id, fields) {
+            updates.push({ id, fields });
+          }
+        },
+        generatedLinkRepository: {
+          findByFingerprint() {
+            return null;
+          },
+          create() {
+            throw new Error("create should not be called after Bitly quota failure");
+          }
+        },
+        auditLogRepository: {
+          log() {}
+        },
+        rateLimiter: {
+          allows() {
+            return true;
+          }
+        },
+        linkRequestParser: {
+          async parse() {
+            return ParsedLinkRequest.fromObject({
+              client: "studleys",
+              channel: "facebook",
+              asset_type: "social",
+              campaign_label: "spring sale",
+              destination_url: "https://studleys.com/garden-plants/",
+              needs_qr: false,
+              confidence: 0.95,
+              warnings: [],
+              missing_fields: []
+            });
+          }
+        },
+        requestNormalizer: normalizer,
+        fingerprintService,
+        bitlyService: {
+          async shorten() {
+            throw new BitlyError("Bitly shorten failed with status 429", {
+              statusCode: 429,
+              code: "MONTHLY_ENCODE_LIMIT_REACHED",
+              responseBody: { message: "MONTHLY_ENCODE_LIMIT_REACHED" }
+            });
+          }
+        },
+        qrCodeService: {
+          generateUrl(url) {
+            return `qr:${url}`;
+          }
+        },
+        clickUpChatService: {
+          async postMessage(channelId, message) {
+            messages.push({ channelId, message });
+            return {};
+          }
+        },
+        messageFormatter: new MessageFormatter(),
+        logger: nullLogger
+      });
+
+      await workflow.process(999, {
+        channelId: "8cnb218-8094",
+        threadMessageId: null,
+        deliveryKey: "delivery-999",
+        messageText: "facebook link for studleys spring sale to https://studleys.com/garden-plants/",
+        toJSON() {
+          return {};
+        }
+      });
+
+      assert.equal(messages.length, 1);
+      assert.match(messages[0].message, /Bitly quota was reached/iu);
+      assert.match(messages[0].message, /https:\/\/studleys\.com\/garden-plants\/\?utm_campaign=spring_sale/iu);
+      assert.equal(updates.at(-1).fields.status, "completed_without_short_link");
+      assert.equal(updates.at(-1).fields.error_code, "bitly_quota_reached");
+    }
+  },
+  {
+    name: "failed duplicate delivery is retried instead of deduplicated",
+    async run() {
+      const processed = [];
+      const updates = [];
+      const event = {
+        deliveryKey: "dup-123",
+        workspaceId: "901234",
+        channelId: "456789",
+        messageId: null,
+        threadMessageId: null,
+        userId: null,
+        userName: null,
+        messageText: "Need a link",
+        rawPayload: {},
+        toJSON() {
+          return {
+            deliveryKey: this.deliveryKey,
+            workspaceId: this.workspaceId,
+            channelId: this.channelId,
+            messageId: this.messageId,
+            threadMessageId: this.threadMessageId,
+            userId: this.userId,
+            userName: this.userName,
+            messageText: this.messageText
+          };
+        }
+      };
+
+      const controller = new ClickUpWebhookController({
+        payloadMapper: {
+          map() {
+            return { event, diagnostics: {} };
+          }
+        },
+        webhookVerifier: {
+          verify() {
+            return { passed: true, reasons: [], diagnostics: {} };
+          },
+          shouldIgnore() {
+            return false;
+          }
+        },
+        requestRepository: {
+          findByDeliveryKey() {
+            return { id: 42, status: "failed" };
+          },
+          update(id, fields) {
+            updates.push({ id, fields });
+          }
+        },
+        auditLogRepository: {
+          log() {}
+        },
+        workflowService: {
+          async process(requestId, retryEvent) {
+            processed.push({ requestId, retryEvent });
+          }
+        },
+        logger: nullLogger,
+        debugEnabled: false
+      });
+
+      const response = await controller.handle({
+        method: "POST",
+        path: "/webhooks/clickup/chat",
+        query: {},
+        rawBody: "{\"workspace_id\":\"901234\",\"channel_id\":\"456789\",\"message\":{\"text\":\"Need a link\"}}",
+        headers: {},
+        parseJson() {
+          return {
+            ok: true,
+            value: {
+              workspace_id: "901234",
+              channel_id: "456789",
+              message: {
+                text: "Need a link"
+              }
+            }
+          };
+        },
+        header() {
+          return null;
+        }
+      });
+
+      const body = JSON.parse(response.body);
+      assert.equal(response.statusCode, 200);
+      assert.equal(body.status, "accepted");
+      assert.equal(body.retried, true);
+      assert.equal(body.request_id, 42);
+
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.equal(updates.length, 1);
+      assert.equal(updates[0].id, 42);
+      assert.equal(updates[0].fields.status, "received");
+      assert.equal(processed.length, 1);
+      assert.equal(processed[0].requestId, 42);
+      assert.equal(processed[0].retryEvent.deliveryKey, "dup-123");
+    }
+  },
+  {
+    name: "utm library service lists unique tracked links with request counts",
+    run() {
+      const database = new DatabaseSync(":memory:");
+      database.exec(fs.readFileSync(new URL("../database/migrations/001_init.sql", import.meta.url), "utf8"));
+      const repository = new RequestRepository(database);
+      const libraryService = new UtmLibraryService(repository);
+      const timestampA = "2026-03-12T10:00:00.000Z";
+      const timestampB = "2026-03-13T10:00:00.000Z";
+      const timestampC = "2026-03-13T12:00:00.000Z";
+      const firstId = repository.createIncoming({
+        requestUuid: "req-1",
+        deliveryKey: "delivery-1",
+        status: "received",
+        originalMessage: "Need a Studleys link",
+        rawPayload: {},
+        createdAt: timestampA,
+        updatedAt: timestampA
+      });
+      const secondId = repository.createIncoming({
+        requestUuid: "req-2",
+        deliveryKey: "delivery-2",
+        status: "received",
+        originalMessage: "Need that same Studleys link again",
+        rawPayload: {},
+        createdAt: timestampB,
+        updatedAt: timestampB
+      });
+      const thirdId = repository.createIncoming({
+        requestUuid: "req-3",
+        deliveryKey: "delivery-3",
+        status: "received",
+        originalMessage: "Need a Castle domain link",
+        rawPayload: {},
+        createdAt: timestampC,
+        updatedAt: timestampC
+      });
+
+      repository.update(firstId, {
+        status: "completed",
+        fingerprint: "fp-1",
+        normalized_payload: {
+          client: "studleys",
+          client_display_name: "Studleys",
+          channel: "linkedin",
+          channel_display_name: "LinkedIn",
+          asset_type: "social",
+          campaign_label: "spring sale",
+          canonical_campaign: "spring_sale",
+          destination_url: "https://studleys.com/garden-plants/",
+          normalized_destination_url: "https://studleys.com/garden-plants/",
+          utm_source: "LinkedIn",
+          utm_medium: "Social",
+          utm_campaign: "spring_sale",
+          utm_term: "",
+          utm_content: "",
+          final_long_url: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content="
+        },
+        final_long_url: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=",
+        short_url: "https://bit.ly/a1"
+      });
+      repository.update(secondId, {
+        status: "completed",
+        fingerprint: "fp-1",
+        normalized_payload: {
+          client: "studleys",
+          client_display_name: "Studleys",
+          channel: "linkedin",
+          channel_display_name: "LinkedIn",
+          asset_type: "social",
+          campaign_label: "spring sale",
+          canonical_campaign: "spring_sale",
+          destination_url: "https://studleys.com/garden-plants/",
+          normalized_destination_url: "https://studleys.com/garden-plants/",
+          utm_source: "LinkedIn",
+          utm_medium: "Social",
+          utm_campaign: "spring_sale",
+          utm_term: "",
+          utm_content: "",
+          final_long_url: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content="
+        },
+        final_long_url: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=",
+        short_url: "https://bit.ly/a1",
+        reused_existing: 1
+      });
+      repository.update(thirdId, {
+        status: "completed_without_short_link",
+        fingerprint: "fp-2",
+        normalized_payload: {
+          client: "castle",
+          client_display_name: "Castle",
+          channel: "domain",
+          channel_display_name: "Domain",
+          asset_type: "owned",
+          campaign_label: "ads",
+          canonical_campaign: "Ads",
+          destination_url: "https://www.castleintheclouds.org/",
+          normalized_destination_url: "https://www.castleintheclouds.org/",
+          utm_source: "CastleAdventure",
+          utm_medium: "Domain",
+          utm_campaign: "Ads",
+          utm_term: "HomePage",
+          utm_content: "Visitation",
+          final_long_url: "https://www.castleintheclouds.org/?utm_source=CastleAdventure&utm_medium=Domain&utm_campaign=Ads&utm_term=HomePage&utm_content=Visitation"
+        },
+        final_long_url: "https://www.castleintheclouds.org/?utm_source=CastleAdventure&utm_medium=Domain&utm_campaign=Ads&utm_term=HomePage&utm_content=Visitation",
+        warnings: ["Bitly monthly quota was reached, so no short link was created."]
+      });
+
+      const library = libraryService.list({});
+
+      assert.equal(library.summary.totalUniqueLinks, 2);
+      assert.equal(library.items.length, 2);
+      assert.equal(library.items[0].client, "castle");
+      assert.equal(library.items[0].status, "completed_without_short_link");
+      assert.equal(library.items[0].shortUrl, "");
+      assert.equal(library.items[1].client, "studleys");
+      assert.equal(library.items[1].requestCount, 2);
+      assert.equal(library.items[1].utmCampaign, "spring_sale");
+    }
+  },
+  {
+    name: "utm library controller renders html and csv exports",
+    async run() {
+      const controller = new UtmLibraryController({
+        list() {
+          return {
+            items: [
+              {
+                requestId: 12,
+                status: "completed",
+                client: "studleys",
+                clientDisplayName: "Studleys",
+                channel: "linkedin",
+                channelDisplayName: "LinkedIn",
+                assetType: "social",
+                campaignLabel: "spring sale",
+                canonicalCampaign: "spring_sale",
+                utmSource: "LinkedIn",
+                utmMedium: "Social",
+                utmCampaign: "spring_sale",
+                utmTerm: "",
+                utmContent: "",
+                destinationUrl: "https://studleys.com/garden-plants/",
+                finalLongUrl: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=",
+                shortUrl: "https://bit.ly/3NCDteq",
+                qrUrl: "",
+                originalMessage: "Need a LinkedIn link",
+                warnings: [],
+                requestCount: 3,
+                firstCreatedAt: "2026-03-10T09:00:00.000Z",
+                lastCreatedAt: "2026-03-13T11:30:00.000Z",
+                reusedExisting: false
+              }
+            ],
+            available: {
+              clients: ["studleys"],
+              channels: ["linkedin"],
+              statuses: ["all", "completed", "completed_without_short_link"]
+            },
+            filters: {
+              client: "",
+              channel: "",
+              campaign: "",
+              status: "all",
+              search: "",
+              perPage: 50
+            },
+            pagination: {
+              page: 1,
+              perPage: 50,
+              total: 1,
+              pageCount: 1,
+              hasPreviousPage: false,
+              hasNextPage: false
+            },
+            summary: {
+              totalUniqueLinks: 1,
+              filteredLinks: 1,
+              requestsRepresented: 3
+            }
+          };
+        }
+      });
+
+      const htmlResponse = await controller.handleHtml({ query: {} });
+      const csvResponse = await controller.handleCsv({ query: {} });
+
+      assert.equal(htmlResponse.statusCode, 200);
+      assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
+      assert.match(htmlResponse.body, /UTM Library/iu);
+      assert.match(htmlResponse.body, /spring_sale/iu);
+      assert.equal(csvResponse.statusCode, 200);
+      assert.match(csvResponse.headers["Content-Type"], /text\/csv/iu);
+      assert.match(csvResponse.body, /request_id,status,client/i);
+      assert.match(csvResponse.body, /Studleys/i);
+    }
+  },
+  {
+    name: "health controller reports ready when database, config, and storage are healthy",
+    async run() {
+      const tempRoot = fs.mkdtempSync(path.join(process.cwd(), "storage", "health-test-"));
+      const config = {
+        app: {
+          env: "production",
+          debug: false
+        },
+        database: {
+          path: path.join(tempRoot, "app.sqlite")
+        },
+        logging: {
+          path: path.join(tempRoot, "app.log")
+        },
+        openai: {
+          apiKey: "sk-test",
+          model: "gpt-4.1-mini"
+        },
+        clickup: {
+          apiToken: "pk_test",
+          workspaceId: "901234",
+          allowedChannelIds: ["456789"],
+          webhookSecret: "secret",
+          debugWebhook: false,
+          debugSkipSignature: false,
+          debugSkipChannelCheck: false,
+          debugSkipWorkspaceCheck: false
+        },
+        bitly: {
+          accessToken: "bitly-token"
+        }
+      };
+      const controller = new HealthController({
+        database: {
+          prepare() {
+            return {
+              get() {
+                return { ok: 1 };
+              }
+            };
+          }
+        },
+        config
+      });
+
+      try {
+        const response = await controller.handle();
+        const body = JSON.parse(response.body);
+
+        assert.equal(response.statusCode, 200);
+        assert.equal(body.status, "ok");
+        assert.equal(body.checks.database.status, "ok");
+        assert.equal(body.checks.configuration.status, "ok");
+        assert.equal(body.checks.storage.status, "ok");
+        assert.equal(body.errors.length, 0);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    }
+  },
+  {
+    name: "health controller degrades when required config is missing in production",
+    async run() {
+      const tempRoot = fs.mkdtempSync(path.join(process.cwd(), "storage", "health-test-"));
+      const controller = new HealthController({
+        database: {
+          prepare() {
+            return {
+              get() {
+                return { ok: 1 };
+              }
+            };
+          }
+        },
+        config: {
+          app: {
+            env: "production",
+            debug: true
+          },
+          database: {
+            path: path.join(tempRoot, "app.sqlite")
+          },
+          logging: {
+            path: path.join(tempRoot, "app.log")
+          },
+          openai: {
+            apiKey: "",
+            model: ""
+          },
+          clickup: {
+            apiToken: "",
+            workspaceId: "",
+            allowedChannelIds: [],
+            webhookSecret: "",
+            debugWebhook: true,
+            debugSkipSignature: true,
+            debugSkipChannelCheck: false,
+            debugSkipWorkspaceCheck: true
+          },
+          bitly: {
+            accessToken: ""
+          }
+        }
+      });
+
+      try {
+        const response = await controller.handle();
+        const body = JSON.parse(response.body);
+
+        assert.equal(response.statusCode, 503);
+        assert.equal(body.status, "degraded");
+        assert.equal(body.checks.configuration.status, "error");
+        assert.ok(body.errors.some((issue) => issue.code === "missing_env"));
+        assert.ok(body.errors.some((issue) => issue.code === "missing_channel_allowlist"));
+        assert.ok(body.errors.some((issue) => issue.code === "debug_enabled_in_production"));
+        assert.ok(body.errors.some((issue) => issue.code === "debug_bypass_enabled_in_production"));
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
     }
   },
   {
@@ -220,7 +889,7 @@ let failures = 0;
 
 for (const testCase of tests) {
   try {
-    testCase.run();
+    await testCase.run();
     process.stdout.write(`[PASS] ${testCase.name}\n`);
   } catch (error) {
     failures += 1;

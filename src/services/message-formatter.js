@@ -3,13 +3,17 @@ export class MessageFormatter {
     const lines = [
       `Client: ${request.clientDisplayName}`,
       `Channel: ${request.channelDisplayName}`,
-      `Campaign: ${request.canonicalCampaign}`,
+      `Source: ${request.utmSource}`,
+      `Medium: ${request.utmMedium}`,
+      `Campaign: ${request.utmCampaign ?? request.canonicalCampaign}`,
+      `Term: ${request.utmTerm === "" ? "(empty)" : request.utmTerm}`,
+      `Content: ${request.utmContent === "" ? "(empty)" : request.utmContent}`,
       "",
       "UTM:",
       result.longUrl,
       "",
       "Short Link:",
-      result.shortUrl
+      result.shortLinkAvailable ? result.shortUrl : "Unavailable right now. Bitly quota was reached, so use the full UTM link above."
     ];
 
     if (result.qrUrl) {

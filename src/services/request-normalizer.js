@@ -11,6 +11,11 @@ export class RequestNormalizer {
   normalize(parsed) {
     const warnings = [...parsed.warnings];
     const missingFields = [...parsed.missingFields];
+    const correctedCampaignLabel = this.rulesService.normalizeCampaignLabel(parsed.campaignLabel);
+
+    if (correctedCampaignLabel && parsed.campaignLabel && correctedCampaignLabel !== String(parsed.campaignLabel).trim().toLowerCase()) {
+      warnings.push(`Campaign label corrected to "${correctedCampaignLabel}".`);
+    }
 
     let normalizedDestination = null;
     if (!parsed.destinationUrl) {
@@ -51,44 +56,53 @@ export class RequestNormalizer {
       });
     }
 
-    const campaign = this.rulesService.buildCampaign(client, channel, parsed.campaignLabel, new Date());
-    const sourceMedium = this.rulesService.getSourceMedium(channel);
-
-    if (!sourceMedium) {
+    const parsedForResolution = {
+      ...parsed,
+      campaignLabel: correctedCampaignLabel
+    };
+    const utm = this.rulesService.resolveUtmParameters(client, channel, parsedForResolution);
+    const effectiveWarnings = this.removeResolvedUtmWarnings(uniqueWarnings, utm);
+    const effectiveMissingFields = this.removeResolvedUtmMissingFields(uniqueMissing, utm);
+    if (!utm.source || !utm.medium || !utm.campaign) {
       return new WorkflowDecision({
         status: "clarify",
-        warnings: uniqueWarnings,
-        missingFields: ["channel"],
-        message: `I could not map that channel to a supported source/medium pair. Please reply with one of: ${this.rulesService.channels().join(", ")}.`
+        warnings: effectiveWarnings,
+        missingFields: ["utm_source", "utm_medium", "utm_campaign"],
+        message: "I could not resolve the full UTM set for that request. Please restate it or provide explicit source, medium, and campaign values."
       });
     }
 
     const finalLongUrl = this.urlService.appendUtms(normalizedDestination, {
-      utm_source: sourceMedium.source,
-      utm_medium: sourceMedium.medium,
-      utm_campaign: campaign.canonicalCampaign
+      utm_source: utm.source,
+      utm_medium: utm.medium,
+      utm_campaign: utm.campaign,
+      utm_term: utm.term,
+      utm_content: utm.content
     });
 
     return new WorkflowDecision({
       status: "ready",
-      warnings: uniqueWarnings,
-      missingFields: [],
+      warnings: effectiveWarnings,
+      missingFields: effectiveMissingFields,
       normalizedRequest: new NormalizedLinkRequest({
         client,
         clientDisplayName: this.rulesService.getClientDisplayName(client),
         channel,
         channelDisplayName: this.rulesService.getChannelDisplayName(channel),
         assetType,
-        campaignLabel: campaign.campaignLabel,
-        canonicalCampaign: campaign.canonicalCampaign,
+        campaignLabel: correctedCampaignLabel ?? utm.campaign,
+        canonicalCampaign: utm.campaign,
         destinationUrl: parsed.destinationUrl,
         normalizedDestinationUrl: normalizedDestination,
-        utmSource: sourceMedium.source,
-        utmMedium: sourceMedium.medium,
+        utmSource: utm.source,
+        utmMedium: utm.medium,
+        utmCampaign: utm.campaign,
+        utmTerm: utm.term,
+        utmContent: utm.content,
         finalLongUrl,
         needsQr: parsed.needsQr || channel === "qr",
         confidence: parsed.confidence,
-        warnings: uniqueWarnings
+        warnings: effectiveWarnings
       })
     });
   }
@@ -107,9 +121,39 @@ export class RequestNormalizer {
     }
 
     if (confidence < this.confidenceThreshold) {
-      return "I was not confident enough to generate a tracked link from that message. Please restate it or use: link | client=studleys | channel=instagram | campaign=spring-sale | url=https://studleys.com/perennials";
+      return "I was not confident enough to generate a tracked link from that message. Please restate it or use: link | client=studleys | channel=instagram | campaign=SpringSale | url=https://studleys.com/perennials";
     }
 
     return "I need a bit more detail before generating this link.";
+  }
+
+  removeResolvedUtmWarnings(warnings, utm) {
+    if (!utm.source && !utm.medium && !utm.campaign) {
+      return warnings;
+    }
+
+    return warnings.filter((warning) => !/^utm_(source|medium|campaign|term|content)\s+not specified, left null$/iu.test(warning));
+  }
+
+  removeResolvedUtmMissingFields(missingFields, utm) {
+    const resolved = new Set();
+
+    if (utm.source) {
+      resolved.add("utm_source");
+    }
+    if (utm.medium) {
+      resolved.add("utm_medium");
+    }
+    if (utm.campaign) {
+      resolved.add("utm_campaign");
+    }
+    if (utm.term !== null && utm.term !== undefined) {
+      resolved.add("utm_term");
+    }
+    if (utm.content !== null && utm.content !== undefined) {
+      resolved.add("utm_content");
+    }
+
+    return missingFields.filter((field) => !resolved.has(field));
   }
 }

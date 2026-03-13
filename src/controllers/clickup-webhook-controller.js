@@ -141,6 +141,45 @@ export class ClickUpWebhookController {
 
       const existing = this.requestRepository.findByDeliveryKey(event.deliveryKey);
       if (existing) {
+        if (this.shouldRetryExistingRequest(existing)) {
+          const requestId = Number(existing.id);
+          this.logger.info("ClickUp webhook retrying existing request.", {
+            ...baseContext,
+            requestId,
+            deliveryKey: event.deliveryKey,
+            previousStatus: existing.status
+          });
+
+          this.requestRepository.update(requestId, {
+            status: "received",
+            error_code: null,
+            error_message: null
+          });
+          this.auditLogRepository.log(requestId, "info", "request_retried", "Webhook payload accepted for retry.", {
+            correlationId,
+            previousStatus: existing.status,
+            ...event.toJSON()
+          });
+
+          setImmediate(() => {
+            this.workflowService.process(requestId, event, { correlationId }).catch((error) => {
+              this.logger.error("Deferred workflow execution failed.", {
+                requestId,
+                correlationId,
+                error: error.message
+              });
+            });
+          });
+
+          return NodeResponse.json({
+            status: "accepted",
+            retried: true,
+            request_id: requestId,
+            delivery_key: event.deliveryKey,
+            correlation_id: correlationId
+          }, 200, this.responseHeaders(correlationId));
+        }
+
         this.logger.info("ClickUp webhook request deduplicated.", {
           ...baseContext,
           requestId: Number(existing.id),
@@ -191,7 +230,7 @@ export class ClickUpWebhookController {
         request_id: requestId,
         delivery_key: event.deliveryKey,
         correlation_id: correlationId
-      }, 202, this.responseHeaders(correlationId));
+      }, 200, this.responseHeaders(correlationId));
     } catch (error) {
       if (error instanceof WebhookError) {
         return this.respondFailure({
@@ -252,5 +291,9 @@ export class ClickUpWebhookController {
     return {
       "X-Correlation-Id": correlationId
     };
+  }
+
+  shouldRetryExistingRequest(existing) {
+    return ["failed", "completed_without_short_link"].includes(String(existing.status ?? "").trim().toLowerCase());
   }
 }

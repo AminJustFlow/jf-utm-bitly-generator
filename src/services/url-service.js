@@ -4,7 +4,7 @@ export class UrlService {
     parsed.protocol = parsed.protocol.toLowerCase();
     parsed.hostname = parsed.hostname.toLowerCase();
 
-    for (const key of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"]) {
+    for (const key of UTM_KEYS) {
       parsed.searchParams.delete(key);
     }
 
@@ -15,12 +15,12 @@ export class UrlService {
   appendUtms(destinationUrl, utmParams) {
     const parsed = new URL(destinationUrl);
 
-    for (const key of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"]) {
+    for (const key of UTM_KEYS) {
       parsed.searchParams.delete(key);
     }
 
     for (const [key, value] of Object.entries(utmParams)) {
-      if (value !== undefined && value !== null && value !== "") {
+      if (value !== undefined && value !== null && (value !== "" || UTM_KEYS.includes(key))) {
         parsed.searchParams.set(key, value);
       }
     }
@@ -29,6 +29,8 @@ export class UrlService {
     return parsed.toString();
   }
 }
+
+const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
 
 function buildSortedSearch(searchParams) {
   const entries = [...searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) => {

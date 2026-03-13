@@ -12,6 +12,7 @@ import { loadEnvFile } from "./env-loader.js";
 import { HealthController } from "../controllers/health-controller.js";
 import { DebugController } from "../controllers/debug-controller.js";
 import { ClickUpWebhookController } from "../controllers/clickup-webhook-controller.js";
+import { UtmLibraryController } from "../controllers/utm-library-controller.js";
 import { RequestRepository } from "../repositories/request-repository.js";
 import { GeneratedLinkRepository } from "../repositories/generated-link-repository.js";
 import { AuditLogRepository } from "../repositories/audit-log-repository.js";
@@ -31,6 +32,7 @@ import { QrCodeService } from "../services/qr-code-service.js";
 import { ClickUpChatService } from "../services/clickup-chat-service.js";
 import { MessageFormatter } from "../services/message-formatter.js";
 import { LinkWorkflowService } from "../services/link-workflow-service.js";
+import { UtmLibraryService } from "../services/utm-library-service.js";
 
 export async function createApplication(projectRoot) {
   loadEnvFile(path.join(projectRoot, ".env"));
@@ -49,6 +51,7 @@ export async function createApplication(projectRoot) {
   const requestRepository = new RequestRepository(database);
   const generatedLinkRepository = new GeneratedLinkRepository(database);
   const auditLogRepository = new AuditLogRepository(database);
+  const utmLibraryService = new UtmLibraryService(requestRepository);
   const rulesService = new RulesService(rules);
   const urlService = new UrlService();
   const fingerprintService = new FingerprintService();
@@ -79,7 +82,7 @@ export async function createApplication(projectRoot) {
     logger
   });
 
-  const healthController = new HealthController(database);
+  const healthController = new HealthController({ database, config });
   const debugController = new DebugController({
     debugEnabled: config.app.debug || config.clickup.debugWebhook,
     fixtureDirectory: path.join(projectRoot, "tests", "fixtures"),
@@ -95,9 +98,13 @@ export async function createApplication(projectRoot) {
     logger,
     debugEnabled: config.app.debug || config.clickup.debugWebhook
   });
+  const utmLibraryController = new UtmLibraryController(utmLibraryService);
 
   const router = new Router();
   router.add("GET", "/health", (request) => healthController.handle(request));
+  router.add("GET", "/utms", (request) => utmLibraryController.handleHtml(request));
+  router.add("GET", "/utms.json", (request) => utmLibraryController.handleJson(request));
+  router.add("GET", "/utms.csv", (request) => utmLibraryController.handleCsv(request));
   router.add("GET", "/debug/sample-payload", (request) => debugController.handleSample(request));
   router.add("GET", "/debug/webhook-info", (request) => debugController.handleInfo(request));
   router.add("POST", "/debug/webhook-echo", (request) => debugController.handleEcho(request));

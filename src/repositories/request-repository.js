@@ -105,4 +105,40 @@ export class RequestRepository {
 
     return Number(row?.count ?? 0);
   }
+
+  listUniqueTrackedRequests({ statuses = ["completed", "completed_without_short_link"] } = {}) {
+    const normalizedStatuses = Array.isArray(statuses)
+      ? statuses.map((status) => String(status ?? "").trim()).filter(Boolean)
+      : [];
+    const params = {};
+    const statusClause = normalizedStatuses.length > 0
+      ? `AND status IN (${normalizedStatuses.map((_, index) => `:status_${index}`).join(", ")})`
+      : "";
+
+    normalizedStatuses.forEach((status, index) => {
+      params[`status_${index}`] = status;
+    });
+
+    return this.database.prepare(`
+      SELECT
+        r.*,
+        grouped.request_count,
+        grouped.first_created_at,
+        grouped.last_created_at
+      FROM requests r
+      INNER JOIN (
+        SELECT
+          COALESCE(NULLIF(fingerprint, ''), request_uuid) AS dedupe_key,
+          MAX(id) AS latest_id,
+          COUNT(*) AS request_count,
+          MIN(created_at) AS first_created_at,
+          MAX(created_at) AS last_created_at
+        FROM requests
+        WHERE final_long_url IS NOT NULL
+          ${statusClause}
+        GROUP BY COALESCE(NULLIF(fingerprint, ''), request_uuid)
+      ) grouped ON grouped.latest_id = r.id
+      ORDER BY grouped.last_created_at DESC, r.id DESC
+    `).all(params);
+  }
 }
