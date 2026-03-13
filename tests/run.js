@@ -847,6 +847,28 @@ const tests = [
     }
   },
   {
+    name: "clickup payload mapper falls back to nested custom message text",
+    run() {
+      const payload = {
+        data: {
+          trigger: {
+            workspaceId: "901234",
+            channelId: "456789",
+            customMessage: "Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/"
+          }
+        }
+      };
+      const result = payloadMapper.map(payload, { correlationId: "test-correlation" });
+
+      assert.equal(result.event.workspaceId, "901234");
+      assert.equal(result.event.channelId, "456789");
+      assert.equal(result.event.messageText, "Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/");
+      assert.equal(result.diagnostics.matchedPaths.messageText, "data.trigger.customMessage");
+      assert.equal(result.diagnostics.matchedPaths.workspaceId, "data.trigger.workspaceId");
+      assert.equal(result.diagnostics.matchedPaths.channelId, "data.trigger.channelId");
+    }
+  },
+  {
     name: "clickup test webhook fixture fails with explicit missing message code",
     run() {
       const payload = JSON.parse(fs.readFileSync(new URL("./fixtures/clickup-test-webhook.json", import.meta.url), "utf8"));

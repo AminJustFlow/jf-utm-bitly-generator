@@ -13,33 +13,17 @@ export class ClickUpPayloadMapper {
   map(payload, context = {}) {
     const correlationId = context.correlationId ?? null;
     const requestQuery = context.requestQuery ?? {};
-    const messageText = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
-      "message.text",
-      "message.content",
-      "message.body",
-      "message.text_content",
-      "payload.text",
-      "payload.content",
-      "payload.text_content",
-      "payload.message.text",
-      "payload.message.content",
-      "payload.message.text_content",
-      "event_data.message.text",
-      "content",
-      "text",
-      "text_content",
-      "history_items.0.after.comment_text"
-    ]);
-
-    const workspaceId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const sources = [{ label: "payload", value: payload }, { label: "query", value: requestQuery }];
+    const messageText = this.resolveMessageText(sources);
+    const workspaceId = this.resolveScalar(sources, [
       "workspace_id",
       "team_id",
       "payload.workspace_id",
       "workspace.id",
       "workspaceId"
-    ]);
+    ], ["workspace_id", "workspaceId", "team_id", "teamId"]);
 
-    const channelId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const channelId = this.resolveScalar(sources, [
       "channel_id",
       "payload.channel_id",
       "payload.channelId",
@@ -47,9 +31,9 @@ export class ClickUpPayloadMapper {
       "channel.id",
       "chat.channel.id",
       "channelId"
-    ]);
+    ], ["channel_id", "channelId"]);
 
-    const messageId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const messageId = this.resolveScalar(sources, [
       "message.id",
       "payload.message.id",
       "payload.comment_id",
@@ -59,48 +43,50 @@ export class ClickUpPayloadMapper {
       "message_id",
       "comment_id",
       "commentId"
-    ]);
+    ], ["message_id", "messageId", "comment_id", "commentId", "id"]);
 
-    const threadMessageId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const threadMessageId = this.resolveScalar(sources, [
       "message.thread_id",
       "payload.message.thread_id",
       "payload.reply_to_comment_id",
       "reply_to_message_id",
       "reply_to_comment_id",
       "thread.id"
-    ]);
+    ], ["thread_id", "threadId", "reply_to_message_id", "replyToMessageId", "reply_to_comment_id", "replyToCommentId"]);
 
-    const userId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const userId = this.resolveScalar(sources, [
       "message.user.id",
       "payload.message.user.id",
       "user.id",
       "author.id"
-    ]);
+    ], ["user_id", "userId", "author_id", "authorId"]);
 
-    const userName = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const userName = this.resolveScalar(sources, [
       "message.user.username",
       "message.user.name",
       "payload.message.user.username",
       "user.username",
       "user.name",
       "author.username"
-    ]);
+    ], ["username", "user_name", "userName", "name", "author_username", "authorUsername"]);
 
-    const eventType = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const eventType = this.resolveScalar(sources, [
       "event",
       "trigger.event",
       "payload.event"
-    ]);
+    ], ["event", "eventType"]);
 
-    const webhookId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
+    const webhookId = this.resolveScalar(sources, [
       "webhook_id",
       "payload.webhook_id"
-    ]);
+    ], ["webhook_id", "webhookId"]);
 
     const payloadShape = inferPayloadShape(messageText.path ?? channelId.path ?? workspaceId.path);
     const diagnostics = {
       correlationId,
       payloadShape,
+      topLevelKeys: Object.keys(payload ?? {}).slice(0, 20),
+      queryKeys: Object.keys(requestQuery ?? {}).slice(0, 20),
       matchedPaths: {
         messageText: messageText.path,
         workspaceId: workspaceId.path,
@@ -182,6 +168,60 @@ export class ClickUpPayloadMapper {
     };
   }
 
+  resolveMessageText(sources) {
+    const exact = this.firstMatch(sources, [
+      "message.text",
+      "message.content",
+      "message.body",
+      "message.text_content",
+      "payload.text",
+      "payload.content",
+      "payload.text_content",
+      "payload.message.text",
+      "payload.message.content",
+      "payload.message.text_content",
+      "event_data.message.text",
+      "content",
+      "text",
+      "text_content",
+      "history_items.0.after.comment_text"
+    ]);
+    if (exact.value) {
+      return exact;
+    }
+
+    const keyed = this.findFirstStringByKeys(sources, [
+      "text",
+      "text_content",
+      "textContent",
+      "content",
+      "body",
+      "comment_text",
+      "commentText",
+      "message_text",
+      "messageText",
+      "prompt"
+    ]);
+    if (keyed.value) {
+      return keyed;
+    }
+
+    return this.findLikelyRequestText(sources);
+  }
+
+  resolveScalar(sources, exactPaths, preferredKeys = []) {
+    const exact = this.firstMatch(sources, exactPaths);
+    if (exact.value) {
+      return exact;
+    }
+
+    if (preferredKeys.length === 0) {
+      return exact;
+    }
+
+    return this.findFirstStringByKeys(sources, preferredKeys);
+  }
+
   firstMatch(sources, paths) {
     for (const source of sources) {
       for (const path of paths) {
@@ -200,4 +240,109 @@ export class ClickUpPayloadMapper {
       path: null
     };
   }
+
+  findFirstStringByKeys(sources, keys) {
+    const normalizedKeys = new Set(keys.map((key) => normalizeKey(key)));
+    for (const source of sources) {
+      const match = this.walkObject(source.value, ({ key, value, path }) => {
+        if (!key || !isMeaningfulScalar(value)) {
+          return false;
+        }
+
+        return normalizedKeys.has(normalizeKey(key));
+      });
+
+      if (match) {
+        return {
+          value: String(match.value),
+          path: source.label === "payload" ? match.path : `${source.label}.${match.path}`
+        };
+      }
+    }
+
+    return {
+      value: null,
+      path: null
+    };
+  }
+
+  findLikelyRequestText(sources) {
+    for (const source of sources) {
+      const match = this.walkObject(source.value, ({ value }) => {
+        if (!isMeaningfulScalar(value)) {
+          return false;
+        }
+
+        const text = String(value).trim();
+        return /https?:\/\//iu.test(text) || /\blink\b|\butm\b|\bcampaign\b/iu.test(text);
+      });
+
+      if (match) {
+        return {
+          value: String(match.value),
+          path: source.label === "payload" ? match.path : `${source.label}.${match.path}`
+        };
+      }
+    }
+
+    return {
+      value: null,
+      path: null
+    };
+  }
+
+  walkObject(value, predicate, path = "") {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        const childPath = path ? `${path}.${index}` : String(index);
+        const match = this.walkObject(value[index], predicate, childPath);
+        if (match) {
+          return match;
+        }
+      }
+      return null;
+    }
+
+    if (typeof value !== "object") {
+      return null;
+    }
+
+    for (const [key, childValue] of Object.entries(value)) {
+      const childPath = path ? `${path}.${key}` : key;
+      if (predicate({ key, value: childValue, path: childPath })) {
+        return {
+          key,
+          value: childValue,
+          path: childPath
+        };
+      }
+
+      const nested = this.walkObject(childValue, predicate, childPath);
+      if (nested) {
+        return nested;
+      }
+    }
+
+    return null;
+  }
+}
+
+function normalizeKey(value) {
+  return String(value ?? "").replace(/[^a-z0-9]/giu, "").toLowerCase();
+}
+
+function isMeaningfulScalar(value) {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  if (typeof value === "object") {
+    return false;
+  }
+
+  return String(value).trim() !== "";
 }
