@@ -15,10 +15,13 @@ import { ClickUpPayloadMapper } from "../src/services/clickup-payload-mapper.js"
 import { WebhookVerifier } from "../src/services/webhook-verifier.js";
 import { HeuristicParser } from "../src/services/heuristic-parser.js";
 import { FallbackCommandParser } from "../src/services/fallback-command-parser.js";
+import { LinkGenerationService } from "../src/services/link-generation-service.js";
 import { LinkWorkflowService } from "../src/services/link-workflow-service.js";
 import { MessageFormatter } from "../src/services/message-formatter.js";
-import { BitlyError } from "../src/services/bitly-service.js";
+import { UtmLibraryEditorService } from "../src/services/utm-library-editor-service.js";
+import { BasicAuthService } from "../src/services/basic-auth-service.js";
 import { ClickUpWebhookController } from "../src/controllers/clickup-webhook-controller.js";
+import { GeneratedLinkRepository } from "../src/repositories/generated-link-repository.js";
 import { RequestRepository } from "../src/repositories/request-repository.js";
 
 const rulesService = new RulesService(rules);
@@ -293,14 +296,6 @@ const tests = [
             updates.push({ id, fields });
           }
         },
-        generatedLinkRepository: {
-          findByFingerprint() {
-            return null;
-          },
-          create() {
-            throw new Error("create should not be called after Bitly quota failure");
-          }
-        },
         auditLogRepository: {
           log() {}
         },
@@ -326,18 +321,25 @@ const tests = [
         },
         requestNormalizer: normalizer,
         fingerprintService,
-        bitlyService: {
-          async shorten() {
-            throw new BitlyError("Bitly shorten failed with status 429", {
-              statusCode: 429,
-              code: "MONTHLY_ENCODE_LIMIT_REACHED",
-              responseBody: { message: "MONTHLY_ENCODE_LIMIT_REACHED" }
-            });
-          }
-        },
-        qrCodeService: {
-          generateUrl(url) {
-            return `qr:${url}`;
+        linkGenerationService: {
+          async generate(normalized, fingerprint) {
+            return {
+              fingerprint,
+              result: {
+                fingerprint,
+                longUrl: normalized.finalLongUrl,
+                shortUrl: null,
+                qrUrl: null,
+                reusedExisting: false,
+                bitlyMetadata: { message: "MONTHLY_ENCODE_LIMIT_REACHED" },
+                shortLinkAvailable: false
+              },
+              bitlyId: null,
+              bitlyPayload: { message: "MONTHLY_ENCODE_LIMIT_REACHED" },
+              degraded: true,
+              degradedReason: "bitly_quota_reached",
+              degradedMessage: "Bitly shorten failed with status 429"
+            };
           }
         },
         clickUpChatService: {
@@ -559,6 +561,39 @@ const tests = [
     }
   },
   {
+    name: "basic auth service challenges missing credentials and accepts correct ones",
+    run() {
+      const auth = new BasicAuthService({
+        enabled: true,
+        username: "justflow",
+        password: "preview",
+        realm: "JF UTM Library"
+      });
+
+      const challenge = auth.protect({
+        header() {
+          return null;
+        }
+      });
+
+      assert.ok(challenge);
+      assert.equal(challenge.statusCode, 401);
+      assert.match(challenge.headers["WWW-Authenticate"], /Basic realm="JF UTM Library"/iu);
+
+      const allowed = auth.protect({
+        header(name) {
+          if (name !== "authorization") {
+            return null;
+          }
+
+          return `Basic ${Buffer.from("justflow:preview").toString("base64")}`;
+        }
+      });
+
+      assert.equal(allowed, null);
+    }
+  },
+  {
     name: "utm library service lists unique tracked links with request counts",
     run() {
       const database = new DatabaseSync(":memory:");
@@ -668,83 +703,234 @@ const tests = [
       });
 
       const library = libraryService.list({});
+      const filtered = libraryService.list({
+        source: "LinkedIn",
+        short_link: "with_short_link",
+        qr: "without_qr",
+        sort: "client"
+      });
 
       assert.equal(library.summary.totalUniqueLinks, 2);
       assert.equal(library.items.length, 2);
+      assert.equal(library.summary.withQr, 0);
+      assert.equal(library.summary.withoutShortLink, 1);
       assert.equal(library.items[0].client, "castle");
       assert.equal(library.items[0].status, "completed_without_short_link");
       assert.equal(library.items[0].shortUrl, "");
       assert.equal(library.items[1].client, "studleys");
       assert.equal(library.items[1].requestCount, 2);
       assert.equal(library.items[1].utmCampaign, "spring_sale");
+      assert.equal(filtered.items.length, 1);
+      assert.equal(filtered.items[0].client, "studleys");
+      assert.equal(filtered.filters.source, "LinkedIn");
+      assert.equal(filtered.filters.shortLink, "with_short_link");
+      assert.equal(filtered.filters.qr, "without_qr");
+    }
+  },
+  {
+    name: "utm library editor regenerates a reused link and backfills missing qr",
+    async run() {
+      const database = new DatabaseSync(":memory:");
+      database.exec(fs.readFileSync(new URL("../database/migrations/001_init.sql", import.meta.url), "utf8"));
+      const requestRepository = new RequestRepository(database);
+      const generatedLinkRepository = new GeneratedLinkRepository(database);
+      const editorService = new UtmLibraryEditorService({
+        requestRepository,
+        requestNormalizer: normalizer,
+        fingerprintService,
+        linkGenerationService: new LinkGenerationService({
+          generatedLinkRepository,
+          bitlyService: {
+            async shorten() {
+              throw new Error("Bitly should not be called for an existing fingerprint.");
+            }
+          },
+          qrCodeService: {
+            generateUrl(url) {
+              return `qr:${url}`;
+            }
+          }
+        })
+      });
+
+      const normalizedDecision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "studleys",
+        channel: "linkedin",
+        campaign_label: "spring sale",
+        utm_source: "LinkedIn",
+        utm_medium: "Social",
+        utm_campaign: "spring_sale",
+        utm_term: "",
+        utm_content: "",
+        destination_url: "https://studleys.com/garden-plants/",
+        needs_qr: false,
+        confidence: 1
+      }));
+      assert.equal(normalizedDecision.status, "ready");
+
+      const normalized = normalizedDecision.normalizedRequest;
+      const fingerprint = fingerprintService.generate(normalized);
+      generatedLinkRepository.create({
+        fingerprint,
+        client: normalized.client,
+        channel: normalized.channel,
+        assetType: normalized.assetType,
+        normalizedDestinationUrl: normalized.normalizedDestinationUrl,
+        canonicalCampaign: normalized.canonicalCampaign,
+        finalLongUrl: normalized.finalLongUrl,
+        shortUrl: "https://bit.ly/existing",
+        qrUrl: null,
+        bitlyId: "bitly-id",
+        bitlyPayload: { link: "https://bit.ly/existing" },
+        createdAt: "2026-03-13T12:00:00.000Z",
+        updatedAt: "2026-03-13T12:00:00.000Z"
+      });
+
+      const result = await editorService.regenerate({
+        original_request_id: 55,
+        client: "studleys",
+        channel: "linkedin",
+        campaign_label: "spring sale",
+        utm_source: "LinkedIn",
+        utm_medium: "Social",
+        utm_campaign: "spring_sale",
+        utm_term: "",
+        utm_content: "",
+        destination_url: "https://studleys.com/garden-plants/",
+        needs_qr: true
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.status, "completed");
+      assert.equal(result.result.reusedExisting, true);
+      assert.equal(result.result.qrUrl, "qr:https://bit.ly/existing");
+
+      const generatedRow = generatedLinkRepository.findByFingerprint(fingerprint);
+      assert.equal(generatedRow.qr_url, "qr:https://bit.ly/existing");
+
+      const requestRow = database.prepare("SELECT status, qr_url, reused_existing FROM requests WHERE id = ?").get(result.requestId);
+      assert.equal(requestRow.status, "completed");
+      assert.equal(requestRow.qr_url, "qr:https://bit.ly/existing");
+      assert.equal(requestRow.reused_existing, 1);
     }
   },
   {
     name: "utm library controller renders html and csv exports",
     async run() {
       const controller = new UtmLibraryController({
-        list() {
-          return {
-            items: [
-              {
-                requestId: 12,
-                status: "completed",
-                client: "studleys",
-                clientDisplayName: "Studleys",
-                channel: "linkedin",
-                channelDisplayName: "LinkedIn",
-                assetType: "social",
-                campaignLabel: "spring sale",
-                canonicalCampaign: "spring_sale",
-                utmSource: "LinkedIn",
-                utmMedium: "Social",
-                utmCampaign: "spring_sale",
-                utmTerm: "",
-                utmContent: "",
-                destinationUrl: "https://studleys.com/garden-plants/",
-                finalLongUrl: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=",
-                shortUrl: "https://bit.ly/3NCDteq",
-                qrUrl: "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=https%3A%2F%2Fbit.ly%2F3NCDteq",
-                originalMessage: "Need a LinkedIn link",
-                warnings: [],
-                requestCount: 3,
-                firstCreatedAt: "2026-03-10T09:00:00.000Z",
-                lastCreatedAt: "2026-03-13T11:30:00.000Z",
+        utmLibraryService: {
+          list() {
+            return {
+              items: [
+                {
+                  requestId: 12,
+                  status: "completed",
+                  client: "studleys",
+                  clientDisplayName: "Studleys",
+                  channel: "linkedin",
+                  channelDisplayName: "LinkedIn",
+                  assetType: "social",
+                  campaignLabel: "spring sale",
+                  canonicalCampaign: "spring_sale",
+                  utmSource: "LinkedIn",
+                  utmMedium: "Social",
+                  utmCampaign: "spring_sale",
+                  utmTerm: "",
+                  utmContent: "",
+                  destinationUrl: "https://studleys.com/garden-plants/",
+                  finalLongUrl: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=",
+                  shortUrl: "https://bit.ly/3NCDteq",
+                  qrUrl: "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=https%3A%2F%2Fbit.ly%2F3NCDteq",
+                  hasShortUrl: true,
+                  hasQr: true,
+                  originalMessage: "Need a LinkedIn link",
+                  warnings: [],
+                  requestCount: 3,
+                  firstCreatedAt: "2026-03-10T09:00:00.000Z",
+                  lastCreatedAt: "2026-03-13T11:30:00.000Z",
+                  reusedExisting: false
+                }
+              ],
+              available: {
+                clients: ["studleys"],
+                channels: ["linkedin"],
+                sources: ["LinkedIn"],
+                mediums: ["Social"],
+                statuses: ["all", "completed", "completed_without_short_link"],
+                qrStates: ["all", "with_qr", "without_qr"],
+                shortLinkStates: ["all", "with_short_link", "without_short_link"],
+                sorts: ["recent", "oldest", "client", "campaign", "requests"]
+              },
+              filters: {
+                client: "",
+                channel: "",
+                source: "",
+                medium: "",
+                campaign: "",
+                status: "all",
+                search: "",
+                qr: "all",
+                shortLink: "all",
+                sort: "recent",
+                perPage: 24
+              },
+              pagination: {
+                page: 1,
+                perPage: 24,
+                total: 1,
+                pageCount: 1,
+                hasPreviousPage: false,
+                hasNextPage: false
+              },
+              summary: {
+                totalUniqueLinks: 1,
+                filteredLinks: 1,
+                requestsRepresented: 3,
+                withQr: 1,
+                withoutShortLink: 0
+              }
+            };
+          }
+        },
+        utmLibraryEditorService: {
+          async regenerate() {
+            return {
+              ok: true,
+              requestId: 22,
+              status: "completed",
+              result: {
                 reusedExisting: false
               }
-            ],
-            available: {
-              clients: ["studleys"],
-              channels: ["linkedin"],
-              statuses: ["all", "completed", "completed_without_short_link"]
-            },
-            filters: {
-              client: "",
-              channel: "",
-              campaign: "",
-              status: "all",
-              search: "",
-              perPage: 50
-            },
-            pagination: {
-              page: 1,
-              perPage: 50,
-              total: 1,
-              pageCount: 1,
-              hasPreviousPage: false,
-              hasNextPage: false
-            },
-            summary: {
-              totalUniqueLinks: 1,
-              filteredLinks: 1,
-              requestsRepresented: 3
+            };
+          }
+        },
+        rulesService: {
+          clients() {
+            return ["studleys"];
+          },
+          channels() {
+            return ["linkedin"];
+          }
+        }
+      });
+
+      const htmlResponse = await controller.handleHtml({
+        query: {
+          toast: "Saved",
+          highlight_request_id: "12"
+        }
+      });
+      const csvResponse = await controller.handleCsv({ query: {} });
+      const regenerateResponse = await controller.handleRegenerate({
+        parseJson() {
+          return {
+            ok: true,
+            value: {
+              client: "studleys"
             }
           };
         }
       });
-
-      const htmlResponse = await controller.handleHtml({ query: {} });
-      const csvResponse = await controller.handleCsv({ query: {} });
 
       assert.equal(htmlResponse.statusCode, 200);
       assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
@@ -752,10 +938,15 @@ const tests = [
       assert.match(htmlResponse.body, /spring_sale/iu);
       assert.match(htmlResponse.body, /QR Preview/iu);
       assert.match(htmlResponse.body, /create-qr-code/iu);
+      assert.match(htmlResponse.body, /Edit and regenerate/iu);
+      assert.match(htmlResponse.body, /Short Link/iu);
+      assert.match(htmlResponse.body, /data-regenerate-form/iu);
       assert.equal(csvResponse.statusCode, 200);
       assert.match(csvResponse.headers["Content-Type"], /text\/csv/iu);
       assert.match(csvResponse.body, /request_id,status,client/i);
       assert.match(csvResponse.body, /Studleys/i);
+      assert.equal(regenerateResponse.statusCode, 200);
+      assert.match(regenerateResponse.body, /highlight_request_id=22/iu);
     }
   },
   {

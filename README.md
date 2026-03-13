@@ -28,7 +28,7 @@ This is the Node.js port of the internal JF Link Generator Bot for ClickUp Chat.
 ## Project Structure
 
 ```text
-ndoejsapp/
+jf-utm-bitly-generator/
   bin/
   config/
   database/
@@ -87,7 +87,7 @@ Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, whi
 
 ## Production Deployment
 
-1. Deploy the `ndoejsapp/` folder to the server.
+1. Deploy the `jf-utm-bitly-generator/` folder to the server.
 2. Keep `.env` outside version control.
 3. Ensure `storage/database/` and `storage/logs/` are writable.
 4. Run:
@@ -145,6 +145,10 @@ Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, whi
 - `BITLY_GROUP_GUID`
 - `QR_BASE_URL`
 - `QR_SIZE`
+- `LIBRARY_AUTH_ENABLED`
+- `LIBRARY_AUTH_USERNAME`
+- `LIBRARY_AUTH_PASSWORD`
+- `LIBRARY_AUTH_REALM`
 - `CLICKUP_SIGNATURE_HEADER`
 - `CLICKUP_CHAT_MESSAGE_CONTENT_FIELD`
 - `CLICKUP_CHAT_MESSAGE_FALLBACK_FIELD`
@@ -168,7 +172,7 @@ Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, whi
 
 ## ClickUp Payload Mapping
 
-ClickUp Chat webhook payloads can vary. The mapping is isolated in [`src/services/clickup-payload-mapper.js`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/src/services/clickup-payload-mapper.js), and the sample fixtures live under `tests/fixtures/`.
+ClickUp Chat webhook payloads can vary. The mapping is isolated in [`src/services/clickup-payload-mapper.js`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/src/services/clickup-payload-mapper.js), and the sample fixtures live under `tests/fixtures/`.
 
 Recommended first-run process:
 
@@ -184,6 +188,9 @@ Recommended first-run process:
 - Channel allowlisting is supported.
 - Self-message ignore lists are supported to avoid bot loops.
 - Logs redact common sensitive keys.
+- The UTM library routes use HTTP Basic auth by default.
+  - Default credentials: `justflow` / `preview`
+  - Override them with `LIBRARY_AUTH_USERNAME` and `LIBRARY_AUTH_PASSWORD`
 
 ## Testing
 
@@ -205,8 +212,8 @@ Covered cases:
 ## Manual Testing Assets
 
 - Sample payloads: `tests/fixtures/clickup-chat-message.json`, `tests/fixtures/clickup-test-webhook.json`
-- Curl examples: [`docs/CURL_EXAMPLES.md`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/docs/CURL_EXAMPLES.md)
-- Postman collection: [`docs/postman_collection.json`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/docs/postman_collection.json)
+- Curl examples: [`docs/CURL_EXAMPLES.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/docs/CURL_EXAMPLES.md)
+- Postman collection: [`docs/postman_collection.json`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/docs/postman_collection.json)
 - Debug guide: [`DEBUG_WEBHOOK.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/DEBUG_WEBHOOK.md)
 
 ## UTM Library
@@ -218,8 +225,13 @@ Supported query params:
 - `search`
 - `client`
 - `channel`
+- `source`
+- `medium`
 - `campaign`
 - `status`
+- `short_link`
+- `qr`
+- `sort`
 - `page`
 - `per_page`
 
@@ -238,10 +250,10 @@ Supported query params:
 
 ## Related Docs
 
-- [`CLICKUP_SETUP.md`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/CLICKUP_SETUP.md)
-- [`TEAM_USAGE.md`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/TEAM_USAGE.md)
-- [`RULES_CONFIG.md`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/RULES_CONFIG.md)
-- [`PERFECTION_IDEAS.md`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/PERFECTION_IDEAS.md)
+- [`CLICKUP_SETUP.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/CLICKUP_SETUP.md)
+- [`TEAM_USAGE.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/TEAM_USAGE.md)
+- [`RULES_CONFIG.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/RULES_CONFIG.md)
+- [`PERFECTION_IDEAS.md`](/c:/Users/AminHcinet/Documents/JF%20TOOL/jf-utm-bitly-generator/PERFECTION_IDEAS.md)
 
 ## Implementation Checklist
 

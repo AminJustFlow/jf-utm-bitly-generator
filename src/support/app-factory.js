@@ -31,8 +31,11 @@ import { BitlyService } from "../services/bitly-service.js";
 import { QrCodeService } from "../services/qr-code-service.js";
 import { ClickUpChatService } from "../services/clickup-chat-service.js";
 import { MessageFormatter } from "../services/message-formatter.js";
+import { LinkGenerationService } from "../services/link-generation-service.js";
 import { LinkWorkflowService } from "../services/link-workflow-service.js";
 import { UtmLibraryService } from "../services/utm-library-service.js";
+import { UtmLibraryEditorService } from "../services/utm-library-editor-service.js";
+import { BasicAuthService } from "../services/basic-auth-service.js";
 
 export async function createApplication(projectRoot) {
   loadEnvFile(path.join(projectRoot, ".env"));
@@ -67,19 +70,29 @@ export async function createApplication(projectRoot) {
   const qrCodeService = new QrCodeService(config.qr);
   const clickUpChatService = new ClickUpChatService(httpClient, config.clickup);
   const messageFormatter = new MessageFormatter();
+  const libraryAuthService = new BasicAuthService(config.libraryAuth);
+  const linkGenerationService = new LinkGenerationService({
+    generatedLinkRepository,
+    bitlyService,
+    qrCodeService
+  });
   const workflowService = new LinkWorkflowService({
     requestRepository,
-    generatedLinkRepository,
     auditLogRepository,
     rateLimiter,
     linkRequestParser,
     requestNormalizer,
     fingerprintService,
-    bitlyService,
-    qrCodeService,
+    linkGenerationService,
     clickUpChatService,
     messageFormatter,
     logger
+  });
+  const utmLibraryEditorService = new UtmLibraryEditorService({
+    requestRepository,
+    requestNormalizer,
+    fingerprintService,
+    linkGenerationService
   });
 
   const healthController = new HealthController({ database, config });
@@ -98,13 +111,18 @@ export async function createApplication(projectRoot) {
     logger,
     debugEnabled: config.app.debug || config.clickup.debugWebhook
   });
-  const utmLibraryController = new UtmLibraryController(utmLibraryService);
+  const utmLibraryController = new UtmLibraryController({
+    utmLibraryService,
+    utmLibraryEditorService,
+    rulesService
+  });
 
   const router = new Router();
   router.add("GET", "/health", (request) => healthController.handle(request));
-  router.add("GET", "/utms", (request) => utmLibraryController.handleHtml(request));
-  router.add("GET", "/utms.json", (request) => utmLibraryController.handleJson(request));
-  router.add("GET", "/utms.csv", (request) => utmLibraryController.handleCsv(request));
+  router.add("GET", "/utms", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleHtml(request)));
+  router.add("GET", "/utms.json", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleJson(request)));
+  router.add("GET", "/utms.csv", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleCsv(request)));
+  router.add("POST", "/utms/regenerate", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleRegenerate(request)));
   router.add("GET", "/debug/sample-payload", (request) => debugController.handleSample(request));
   router.add("GET", "/debug/webhook-info", (request) => debugController.handleInfo(request));
   router.add("POST", "/debug/webhook-echo", (request) => debugController.handleEcho(request));
@@ -167,6 +185,12 @@ function resolveConfig(projectRoot) {
     qr: {
       baseUrl: process.env.QR_BASE_URL ?? baseConfig.qr.baseUrl,
       size: process.env.QR_SIZE ?? baseConfig.qr.size
+    },
+    libraryAuth: {
+      enabled: parseBoolean(process.env.LIBRARY_AUTH_ENABLED, baseConfig.libraryAuth.enabled),
+      username: process.env.LIBRARY_AUTH_USERNAME ?? baseConfig.libraryAuth.username,
+      password: process.env.LIBRARY_AUTH_PASSWORD ?? baseConfig.libraryAuth.password,
+      realm: process.env.LIBRARY_AUTH_REALM ?? baseConfig.libraryAuth.realm
     }
   };
 }
@@ -192,4 +216,15 @@ function parseBoolean(value, fallback) {
   }
 
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function protectLibraryRoute(authService, handler) {
+  return async (request) => {
+    const challenge = authService.protect(request);
+    if (challenge) {
+      return challenge;
+    }
+
+    return handler(request);
+  };
 }

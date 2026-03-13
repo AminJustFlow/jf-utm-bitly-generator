@@ -51,5 +51,11 @@ export default {
   qr: {
     baseUrl: "https://api.qrserver.com/v1/create-qr-code/",
     size: "300x300"
+  },
+  libraryAuth: {
+    enabled: true,
+    username: "justflow",
+    password: "preview",
+    realm: "JF UTM Library"
   }
 };

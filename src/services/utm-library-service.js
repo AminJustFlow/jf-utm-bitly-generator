@@ -1,4 +1,7 @@
 const DEFAULT_STATUSES = ["completed", "completed_without_short_link"];
+const DEFAULT_SORT = "recent";
+const SORT_OPTIONS = ["recent", "oldest", "client", "campaign", "requests"];
+const TOGGLE_FILTERS = ["all", "with_qr", "without_qr", "with_short_link", "without_short_link"];
 
 export class UtmLibraryService {
   constructor(requestRepository) {
@@ -19,21 +22,33 @@ export class UtmLibraryService {
     const available = {
       clients: uniqueValues(items.map((item) => item.client)),
       channels: uniqueValues(items.map((item) => item.channel)),
-      statuses: ["all", ...DEFAULT_STATUSES]
+      sources: uniqueValues(items.map((item) => item.utmSource)),
+      mediums: uniqueValues(items.map((item) => item.utmMedium)),
+      statuses: ["all", ...DEFAULT_STATUSES],
+      qrStates: ["all", "with_qr", "without_qr"],
+      shortLinkStates: ["all", "with_short_link", "without_short_link"],
+      sorts: SORT_OPTIONS
     };
     const filteredItems = items.filter((item) => this.matchesFilters(item, {
       client: query.client,
       channel: query.channel,
+      source: query.source,
+      medium: query.medium,
       campaign: query.campaign,
       status: statusFilter,
-      search: query.search
+      search: query.search,
+      qr: query.qr,
+      shortLink: query.short_link
     }));
-    const total = filteredItems.length;
-    const totalRequests = filteredItems.reduce((sum, item) => sum + item.requestCount, 0);
+    const sortedItems = this.sortItems(filteredItems, query.sort);
+    const total = sortedItems.length;
+    const totalRequests = sortedItems.reduce((sum, item) => sum + item.requestCount, 0);
     const pageCount = Math.max(1, Math.ceil(total / perPage));
     const currentPage = Math.min(page, pageCount);
     const start = (currentPage - 1) * perPage;
-    const results = filteredItems.slice(start, start + perPage);
+    const results = sortedItems.slice(start, start + perPage);
+    const totalWithQr = sortedItems.filter((item) => item.hasQr).length;
+    const totalWithoutShortLink = sortedItems.filter((item) => !item.hasShortUrl).length;
 
     return {
       items: results,
@@ -41,9 +56,14 @@ export class UtmLibraryService {
       filters: {
         client: normalizeFilterValue(query.client),
         channel: normalizeFilterValue(query.channel),
+        source: normalizeTextValue(query.source),
+        medium: normalizeTextValue(query.medium),
         campaign: normalizeTextValue(query.campaign),
         status: statusFilter || "all",
         search: normalizeTextValue(query.search),
+        qr: normalizeToggleValue(query.qr, "all"),
+        shortLink: normalizeToggleValue(query.short_link, "all"),
+        sort: normalizeSortValue(query.sort),
         perPage
       },
       pagination: {
@@ -57,7 +77,9 @@ export class UtmLibraryService {
       summary: {
         totalUniqueLinks: items.length,
         filteredLinks: total,
-        requestsRepresented: totalRequests
+        requestsRepresented: totalRequests,
+        withQr: totalWithQr,
+        withoutShortLink: totalWithoutShortLink
       }
     };
   }
@@ -73,8 +95,34 @@ export class UtmLibraryService {
       return false;
     }
 
+    const source = normalizeTextValue(filters.source);
+    if (source && item.utmSource !== source) {
+      return false;
+    }
+
+    const medium = normalizeTextValue(filters.medium);
+    if (medium && item.utmMedium !== medium) {
+      return false;
+    }
+
     const status = normalizeFilterValue(filters.status);
     if (status && status !== "all" && item.status !== status) {
+      return false;
+    }
+
+    const qr = normalizeToggleValue(filters.qr, "all");
+    if (qr === "with_qr" && !item.hasQr) {
+      return false;
+    }
+    if (qr === "without_qr" && item.hasQr) {
+      return false;
+    }
+
+    const shortLink = normalizeToggleValue(filters.shortLink, "all");
+    if (shortLink === "with_short_link" && !item.hasShortUrl) {
+      return false;
+    }
+    if (shortLink === "without_short_link" && item.hasShortUrl) {
       return false;
     }
 
@@ -108,6 +156,7 @@ export class UtmLibraryService {
         item.destinationUrl,
         item.finalLongUrl,
         item.shortUrl,
+        item.qrUrl,
         item.originalMessage
       ].join(" ").toLowerCase();
       if (!haystack.includes(search.toLowerCase())) {
@@ -116,6 +165,25 @@ export class UtmLibraryService {
     }
 
     return true;
+  }
+
+  sortItems(items, sort) {
+    const sortKey = normalizeSortValue(sort);
+    const sorted = [...items];
+
+    switch (sortKey) {
+      case "oldest":
+        return sorted.sort((left, right) => compareDates(left.lastCreatedAt, right.lastCreatedAt));
+      case "client":
+        return sorted.sort((left, right) => compareText(left.clientDisplayName, right.clientDisplayName) || compareDates(right.lastCreatedAt, left.lastCreatedAt));
+      case "campaign":
+        return sorted.sort((left, right) => compareText(left.utmCampaign || left.canonicalCampaign, right.utmCampaign || right.canonicalCampaign) || compareDates(right.lastCreatedAt, left.lastCreatedAt));
+      case "requests":
+        return sorted.sort((left, right) => (right.requestCount - left.requestCount) || compareDates(right.lastCreatedAt, left.lastCreatedAt));
+      case "recent":
+      default:
+        return sorted.sort((left, right) => compareDates(right.lastCreatedAt, left.lastCreatedAt));
+    }
   }
 
   mapRow(row) {
@@ -149,6 +217,8 @@ export class UtmLibraryService {
       finalLongUrl,
       shortUrl: row.short_url ?? "",
       qrUrl: row.qr_url ?? "",
+      hasShortUrl: Boolean(String(row.short_url ?? "").trim()),
+      hasQr: Boolean(String(row.qr_url ?? "").trim()),
       originalMessage: row.original_message ?? "",
       warnings,
       missingFields,
@@ -232,4 +302,24 @@ function normalizeFilterValue(value) {
 
 function normalizeTextValue(value) {
   return String(value ?? "").trim();
+}
+
+function normalizeToggleValue(value, fallback) {
+  const normalized = normalizeFilterValue(value);
+  return TOGGLE_FILTERS.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeSortValue(value) {
+  const normalized = normalizeFilterValue(value);
+  return SORT_OPTIONS.includes(normalized) ? normalized : DEFAULT_SORT;
+}
+
+function compareText(left, right) {
+  return String(left ?? "").localeCompare(String(right ?? ""));
+}
+
+function compareDates(left, right) {
+  const leftTime = Date.parse(String(left ?? "")) || 0;
+  const rightTime = Date.parse(String(right ?? "")) || 0;
+  return leftTime - rightTime;
 }

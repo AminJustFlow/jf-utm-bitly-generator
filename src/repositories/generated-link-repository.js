@@ -57,4 +57,22 @@ export class GeneratedLinkRepository {
 
     return Number(result.lastInsertRowid);
   }
+
+  updateByFingerprint(fingerprint, fields) {
+    const payload = {
+      ...fields,
+      updated_at: fields.updated_at ?? new Date().toISOString()
+    };
+    const assignments = Object.keys(payload).map((field) => `${field} = :${field}`).join(", ");
+    const values = { fingerprint };
+
+    Object.entries(payload).forEach(([key, value]) => {
+      values[key] = key === "bitly_payload"
+        ? JSON.stringify(value ?? {})
+        : value;
+    });
+
+    this.database.prepare(`UPDATE generated_links SET ${assignments} WHERE fingerprint = :fingerprint`)
+      .run(values);
+  }
 }
