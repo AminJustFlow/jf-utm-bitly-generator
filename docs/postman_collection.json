@@ -1,0 +1,66 @@
+{
+  "info": {
+    "name": "JF Link Generator Bot Node",
+    "_postman_id": "d48f5f65-4e6f-4bba-8a7a-b08a2ca8061e",
+    "description": "Local webhook and health requests for the Node.js JF Link Generator Bot.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Sample ClickUp Webhook",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Signature",
+            "value": "{{clickup_signature}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"webhook_id\": \"wh_123456\",\n  \"event\": \"chatMessageCreated\",\n  \"workspace_id\": \"901234\",\n  \"channel_id\": \"456789\",\n  \"message\": {\n    \"id\": \"msg_abc123\",\n    \"thread_id\": null,\n    \"text\": \"Need an Instagram link for Studleys spring sale to https://studleys.com/perennials\",\n    \"user\": {\n      \"id\": \"user_42\",\n      \"username\": \"Amin\"\n    }\n  },\n  \"sent_at\": \"2026-03-13T09:30:00-04:00\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/webhooks/clickup/chat",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "webhooks",
+            "clickup",
+            "chat"
+          ]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:3000"
+    },
+    {
+      "key": "clickup_signature",
+      "value": ""
+    }
+  ]
+}

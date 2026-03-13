@@ -1,0 +1,16 @@
+{
+  "webhook_id": "wh_123456",
+  "event": "chatMessageCreated",
+  "workspace_id": "901234",
+  "channel_id": "456789",
+  "message": {
+    "id": "msg_abc123",
+    "thread_id": null,
+    "text": "Need an Instagram link for Studleys spring sale to https://studleys.com/perennials",
+    "user": {
+      "id": "user_42",
+      "username": "Amin"
+    }
+  },
+  "sent_at": "2026-03-13T09:30:00-04:00"
+}
