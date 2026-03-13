@@ -58,6 +58,10 @@ export function inferPayloadShape(matchPath) {
     return "payload.message";
   }
 
+  if (matchPath === "payload.content" || matchPath === "payload.text_content" || matchPath === "payload.text") {
+    return "payload";
+  }
+
   if (matchPath.startsWith("event_data.message.")) {
     return "event_data.message";
   }
@@ -68,6 +72,10 @@ export function inferPayloadShape(matchPath) {
 
   if (matchPath === "content" || matchPath === "text") {
     return "top_level";
+  }
+
+  if (matchPath.startsWith("query.")) {
+    return "query";
   }
 
   return "mixed";

@@ -90,6 +90,15 @@ curl -X POST http://127.0.0.1:3000/webhooks/clickup/chat \
 
 Only do that while `DEBUG_WEBHOOK_SKIP_SIGNATURE=true`.
 
+Automation-style payload test with ClickUp-style query params:
+
+```bash
+curl -X POST "http://127.0.0.1:3000/webhooks/clickup/chat?channel_id=456789&comment_id=comment-123" \
+  -H "Content-Type: application/json" \
+  -H "X-Signature: test-secret" \
+  -d "{\"payload\":{\"workspace_id\":\"901234\",\"text_content\":\"Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/\"}}"
+```
+
 ## 5. Test With Postman
 
 1. Create a new `POST` request.
@@ -166,6 +175,12 @@ The generic ClickUp test webhook may not include full message content. If that h
 - `missing_message_text`
 - `missing_channel_id`
 - `unsupported_payload_shape`
+
+For Chat Automation debugging, compare all three places:
+
+- request query string
+- top-level JSON fields
+- nested `payload.*` fields
 
 ## 9. Turn Debug Back Off
 

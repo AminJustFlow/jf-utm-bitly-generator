@@ -74,7 +74,10 @@ export class ClickUpWebhookController {
 
       let mapped;
       try {
-        mapped = this.payloadMapper.map(payload, { correlationId });
+        mapped = this.payloadMapper.map(payload, {
+          correlationId,
+          requestQuery: request.query
+        });
       } catch (error) {
         if (error instanceof WebhookError) {
           return this.respondFailure({

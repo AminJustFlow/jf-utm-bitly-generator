@@ -12,56 +12,72 @@ export class ClickUpPayloadMapper {
 
   map(payload, context = {}) {
     const correlationId = context.correlationId ?? null;
-    const messageText = this.firstMatch(payload, [
+    const requestQuery = context.requestQuery ?? {};
+    const messageText = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "message.text",
       "message.content",
       "message.body",
+      "message.text_content",
+      "payload.text",
+      "payload.content",
+      "payload.text_content",
       "payload.message.text",
       "payload.message.content",
+      "payload.message.text_content",
       "event_data.message.text",
       "content",
       "text",
+      "text_content",
       "history_items.0.after.comment_text"
     ]);
 
-    const workspaceId = this.firstMatch(payload, [
+    const workspaceId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "workspace_id",
       "team_id",
       "payload.workspace_id",
-      "workspace.id"
+      "workspace.id",
+      "workspaceId"
     ]);
 
-    const channelId = this.firstMatch(payload, [
+    const channelId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "channel_id",
       "payload.channel_id",
+      "payload.channelId",
       "context.channel_id",
       "channel.id",
-      "chat.channel.id"
+      "chat.channel.id",
+      "channelId"
     ]);
 
-    const messageId = this.firstMatch(payload, [
+    const messageId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "message.id",
       "payload.message.id",
+      "payload.comment_id",
+      "payload.commentId",
       "event_data.message.id",
       "history_items.0.id",
-      "message_id"
+      "message_id",
+      "comment_id",
+      "commentId"
     ]);
 
-    const threadMessageId = this.firstMatch(payload, [
+    const threadMessageId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "message.thread_id",
       "payload.message.thread_id",
+      "payload.reply_to_comment_id",
       "reply_to_message_id",
+      "reply_to_comment_id",
       "thread.id"
     ]);
 
-    const userId = this.firstMatch(payload, [
+    const userId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "message.user.id",
       "payload.message.user.id",
       "user.id",
       "author.id"
     ]);
 
-    const userName = this.firstMatch(payload, [
+    const userName = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "message.user.username",
       "message.user.name",
       "payload.message.user.username",
@@ -70,13 +86,13 @@ export class ClickUpPayloadMapper {
       "author.username"
     ]);
 
-    const eventType = this.firstMatch(payload, [
+    const eventType = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "event",
       "trigger.event",
       "payload.event"
     ]);
 
-    const webhookId = this.firstMatch(payload, [
+    const webhookId = this.firstMatch([{ label: "payload", value: payload }, { label: "query", value: requestQuery }], [
       "webhook_id",
       "payload.webhook_id"
     ]);
@@ -166,14 +182,16 @@ export class ClickUpPayloadMapper {
     };
   }
 
-  firstMatch(payload, paths) {
-    for (const path of paths) {
-      const value = get(payload, path);
-      if (value !== undefined && value !== null && String(value).trim() !== "") {
-        return {
-          value: String(value),
-          path
-        };
+  firstMatch(sources, paths) {
+    for (const source of sources) {
+      for (const path of paths) {
+        const value = get(source.value, path);
+        if (value !== undefined && value !== null && String(value).trim() !== "") {
+          return {
+            value: String(value),
+            path: source.label === "payload" ? path : `${source.label}.${path}`
+          };
+        }
       }
     }
 

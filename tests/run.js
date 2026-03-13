@@ -821,6 +821,32 @@ const tests = [
     }
   },
   {
+    name: "clickup payload mapper supports automation payload nesting and query ids",
+    run() {
+      const payload = {
+        payload: {
+          workspace_id: "901234",
+          text_content: "Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/"
+        }
+      };
+      const result = payloadMapper.map(payload, {
+        correlationId: "test-correlation",
+        requestQuery: {
+          channel_id: "456789",
+          comment_id: "comment-123"
+        }
+      });
+
+      assert.equal(result.diagnostics.payloadShape, "payload");
+      assert.equal(result.event.workspaceId, "901234");
+      assert.equal(result.event.channelId, "456789");
+      assert.equal(result.event.messageId, "comment-123");
+      assert.equal(result.event.messageText, "Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/");
+      assert.equal(result.diagnostics.matchedPaths.messageText, "payload.text_content");
+      assert.equal(result.diagnostics.matchedPaths.channelId, "query.channel_id");
+    }
+  },
+  {
     name: "clickup test webhook fixture fails with explicit missing message code",
     run() {
       const payload = JSON.parse(fs.readFileSync(new URL("./fixtures/clickup-test-webhook.json", import.meta.url), "utf8"));

@@ -46,6 +46,12 @@ Inside `#jf-link-generator`:
    https://your-app.example.com/webhooks/clickup/chat
    ```
 
+   Recommended while using ClickUp Chat Automation dynamic fields:
+
+   ```text
+   https://your-app.example.com/webhooks/clickup/chat?channel_id={{channel_id}}&comment_id={{comment_id}}
+   ```
+
 8. Add this header:
 
    ```text
@@ -107,5 +113,7 @@ To avoid that:
 ## 7. Practical Gotchas
 
 - ClickUp Chat payload shape may vary by workspace. If needed, update [`src/services/clickup-payload-mapper.js`](/c:/Users/AminHcinet/Documents/jf-utm-bitly-generator/ndoejsapp/src/services/clickup-payload-mapper.js).
+- The mapper now accepts message text from `payload.text_content`, `payload.content`, `payload.message.text`, and similar variants.
+- The mapper now accepts `channel_id` and `comment_id` from webhook query params if you add them as ClickUp dynamic URL fields.
 - If outbound message posting returns `400`, verify the correct content field for your ClickUp Chat API response shape.
 - Keep the channel dedicated to link requests. Side conversations reduce parser confidence and pollute analytics.
