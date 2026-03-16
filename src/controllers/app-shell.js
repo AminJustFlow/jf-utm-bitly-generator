@@ -1,7 +1,9 @@
 const NAV_ITEMS = [
   { key: "library", href: "/utms", label: "Saved Links" },
   { key: "builder", href: "/new", label: "Create Link" },
-  { key: "imports", href: "/imports", label: "Import History" }
+  { key: "imports", href: "/imports", label: "Import History" },
+  { key: "websites", href: "/admin/websites", label: "Websites" },
+  { key: "reports", href: "/admin/reports", label: "Reports" }
 ];
 
 export function renderAppShellStyles() {
@@ -21,7 +23,7 @@ export function renderAppHeader(activeKey) {
   return `<header class="app-header">
     <div class="app-brand">
       <a href="/utms">JF Link Manager</a>
-      <span>Create, import, and manage tracked links from one place.</span>
+      <span>Create links, manage websites, and review attribution in one place.</span>
     </div>
     <nav class="app-nav" aria-label="Primary">
       ${NAV_ITEMS.map((item) => renderNavItem(item, activeKey)).join("")}

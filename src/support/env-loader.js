@@ -16,10 +16,14 @@ export function loadEnvFile(filePath) {
     const index = trimmed.indexOf("=");
     const key = trimmed.slice(0, index).trim();
     const rawValue = trimmed.slice(index + 1).trim();
-    if (!key || process.env[key] !== undefined) {
+    if (!key || hasConfiguredValue(process.env[key])) {
       continue;
     }
 
     process.env[key] = rawValue.replace(/^['"]|['"]$/gu, "");
   }
+}
+
+function hasConfiguredValue(value) {
+  return value !== undefined && String(value).trim() !== "";
 }

@@ -4,9 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import rules from "../config/rules.js";
 import { HealthController } from "../src/controllers/health-controller.js";
+import { ReportingController } from "../src/controllers/reporting-controller.js";
+import { TrackingController } from "../src/controllers/tracking-controller.js";
 import { UtmLibraryController } from "../src/controllers/utm-library-controller.js";
 import { UtmBuilderController } from "../src/controllers/utm-builder-controller.js";
 import { UtmImportController } from "../src/controllers/utm-import-controller.js";
+import { WebsiteAdminController } from "../src/controllers/website-admin-controller.js";
 import { RulesService } from "../src/services/rules-service.js";
 import { UrlService } from "../src/services/url-service.js";
 import { FingerprintService } from "../src/services/fingerprint-service.js";
@@ -23,14 +26,33 @@ import { LinkWorkflowService } from "../src/services/link-workflow-service.js";
 import { MessageFormatter } from "../src/services/message-formatter.js";
 import { UtmLibraryEditorService } from "../src/services/utm-library-editor-service.js";
 import { BasicAuthService } from "../src/services/basic-auth-service.js";
+import { AnalyticsReportingService } from "../src/services/analytics-reporting-service.js";
 import { ClickUpChatService } from "../src/services/clickup-chat-service.js";
+import { PluginConfigService } from "../src/services/plugin-config-service.js";
+import { PluginTelemetryService } from "../src/services/plugin-telemetry-service.js";
 import { RateLimiter } from "../src/services/rate-limiter.js";
 import { ReceivedRequestRecoveryService } from "../src/services/received-request-recovery-service.js";
 import { TrackerImportService } from "../src/services/tracker-import-service.js";
+import { TrackingAuthService } from "../src/services/tracking-auth-service.js";
+import { TrackingIngestionService } from "../src/services/tracking-ingestion-service.js";
+import { WebsiteAdministrationService } from "../src/services/website-administration-service.js";
 import { XlsxWorkbookReader } from "../src/services/xlsx-workbook-reader.js";
+import { WebsiteProvisioningService } from "../src/services/website-provisioning-service.js";
+import { loadEnvFile } from "../src/support/env-loader.js";
+import { AnalyticsRollupRepository } from "../src/repositories/analytics-rollup-repository.js";
 import { ClickUpWebhookController } from "../src/controllers/clickup-webhook-controller.js";
+import { ClientRepository } from "../src/repositories/client-repository.js";
+import { ConversionAttributionRepository } from "../src/repositories/conversion-attribution-repository.js";
+import { ConversionRepository } from "../src/repositories/conversion-repository.js";
 import { GeneratedLinkRepository } from "../src/repositories/generated-link-repository.js";
 import { RequestRepository } from "../src/repositories/request-repository.js";
+import { SessionRepository } from "../src/repositories/session-repository.js";
+import { TrackingEventRepository } from "../src/repositories/tracking-event-repository.js";
+import { VisitorRepository } from "../src/repositories/visitor-repository.js";
+import { WebsiteCredentialEventRepository } from "../src/repositories/website-credential-event-repository.js";
+import { WebsiteInstallationEventRepository } from "../src/repositories/website-installation-event-repository.js";
+import { WebsiteInstallationRepository } from "../src/repositories/website-installation-repository.js";
+import { WebsiteRepository } from "../src/repositories/website-repository.js";
 
 const rulesService = new RulesService(rules);
 const urlService = new UrlService();
@@ -445,6 +467,31 @@ const tests = [
       assert.match(messages[0].message, /https:\/\/studleys\.com\/garden-plants\/\?utm_source=Facebook&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=/iu);
       assert.equal(updates.at(-1).fields.status, "completed_without_short_link");
       assert.equal(updates.at(-1).fields.error_code, "bitly_quota_reached");
+    }
+  },
+  {
+    name: "env loader fills blank inherited values from the env file",
+    run() {
+      const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-env-loader-"));
+      const envFile = path.join(tempDir, ".env");
+      const originalValue = process.env.TRACKING_SECRET_ENCRYPTION_KEY;
+
+      try {
+        fs.writeFileSync(envFile, "TRACKING_SECRET_ENCRYPTION_KEY=test-tracking-secret\n", "utf8");
+        process.env.TRACKING_SECRET_ENCRYPTION_KEY = "";
+
+        loadEnvFile(envFile);
+
+        assert.equal(process.env.TRACKING_SECRET_ENCRYPTION_KEY, "test-tracking-secret");
+      } finally {
+        if (originalValue === undefined) {
+          delete process.env.TRACKING_SECRET_ENCRYPTION_KEY;
+        } else {
+          process.env.TRACKING_SECRET_ENCRYPTION_KEY = originalValue;
+        }
+
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
     }
   },
   {
@@ -2221,6 +2268,800 @@ const tests = [
       assert.equal(verification.passed, false);
       assert.equal(verification.reasons[0].code, "invalid_signature");
     }
+  },
+  {
+    name: "tracking auth service verifies a valid signed request",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Just Flow",
+        website_name: "Main Site",
+        base_url: "https://example.com"
+      });
+      const request = createSignedTrackingRequest({
+        authService: context.trackingAuthService,
+        publicKey: registration.public_key,
+        secretKey: registration.secret_key,
+        timestamp: "2026-03-16T12:00:00.000Z",
+        body: {
+          installation_id: "install-1",
+          plugin_version: "1.0.0",
+          sent_at: "2026-03-16T12:00:00.000Z",
+          events: []
+        }
+      });
+
+      const verification = context.trackingAuthService.verifyRequest(request, {
+        now: new Date("2026-03-16T12:03:00.000Z")
+      });
+
+      assert.equal(verification.ok, true);
+      assert.equal(verification.website.public_key, registration.public_key);
+    }
+  },
+  {
+    name: "tracking auth service rejects invalid signatures",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Just Flow",
+        website_name: "Main Site",
+        base_url: "https://example.com"
+      });
+      const request = createSignedTrackingRequest({
+        authService: context.trackingAuthService,
+        publicKey: registration.public_key,
+        secretKey: "jfsk_wrong-secret",
+        timestamp: "2026-03-16T12:00:00.000Z",
+        body: {
+          installation_id: "install-1",
+          plugin_version: "1.0.0",
+          sent_at: "2026-03-16T12:00:00.000Z",
+          events: []
+        }
+      });
+
+      const verification = context.trackingAuthService.verifyRequest(request, {
+        now: new Date("2026-03-16T12:03:00.000Z")
+      });
+
+      assert.equal(verification.ok, false);
+      assert.equal(verification.statusCode, 403);
+      assert.equal(verification.error.code, "invalid_signature");
+    }
+  },
+  {
+    name: "tracking auth service rejects stale timestamps",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Just Flow",
+        website_name: "Main Site",
+        base_url: "https://example.com"
+      });
+      const request = createSignedTrackingRequest({
+        authService: context.trackingAuthService,
+        publicKey: registration.public_key,
+        secretKey: registration.secret_key,
+        timestamp: "2026-03-16T12:00:00.000Z",
+        body: {
+          installation_id: "install-1",
+          plugin_version: "1.0.0",
+          sent_at: "2026-03-16T12:00:00.000Z",
+          events: []
+        }
+      });
+
+      const verification = context.trackingAuthService.verifyRequest(request, {
+        now: new Date("2026-03-16T12:06:00.000Z")
+      });
+
+      assert.equal(verification.ok, false);
+      assert.equal(verification.statusCode, 401);
+      assert.equal(verification.error.code, "stale_timestamp");
+    }
+  },
+  {
+    name: "website provisioning returns a plain secret once and stores protected credentials",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com/subdir/",
+        config_json: {
+          session_timeout_minutes: 45
+        }
+      });
+
+      const row = context.database.prepare(`
+        SELECT public_key, secret_key_hash, secret_key_encrypted, base_url, config_json
+        FROM websites
+        WHERE id = :id
+      `).get({ id: registration.website.id });
+
+      assert.match(registration.secret_key, /^jfsk_/u);
+      assert.equal(registration.public_key, row.public_key);
+      assert.notEqual(row.secret_key_hash, registration.secret_key);
+      assert.notEqual(row.secret_key_encrypted, registration.secret_key);
+      assert.equal(row.base_url, "https://example.com/subdir");
+      assert.equal(JSON.parse(row.config_json).session_timeout_minutes, 45);
+      assert.equal(registration.website.config_json.session_timeout_minutes, 45);
+      assert.equal("secret_key" in registration.website, false);
+    }
+  },
+  {
+    name: "website provisioning reuses the same client and stores wordpress site context",
+    run() {
+      const context = createTrackingTestContext();
+      const first = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Main Site",
+        base_url: "https://example.com",
+        wordpress: {
+          multisite_enabled: true,
+          network_id: "network-1",
+          network_name: "Client Network",
+          site_id: "7",
+          site_path: "/marketing/"
+        }
+      });
+      const second = context.websiteProvisioningService.createWebsite({
+        client_name: "client a",
+        website_name: "Store Site",
+        base_url: "https://store.example.com"
+      });
+      const clients = context.clientRepository.list();
+      const firstRow = context.websiteRepository.findById(first.website.id);
+      const secondRow = context.websiteRepository.findById(second.website.id);
+
+      assert.equal(clients.length, 1);
+      assert.equal(firstRow.client_id, secondRow.client_id);
+      assert.equal(first.website.client_id, Number(firstRow.client_id));
+      assert.equal(first.website.wordpress.multisite_enabled, true);
+      assert.equal(firstRow.wp_multisite_enabled, 1);
+      assert.equal(firstRow.wp_network_id, "network-1");
+      assert.equal(firstRow.wp_network_name, "Client Network");
+      assert.equal(firstRow.wp_site_id, "7");
+      assert.equal(firstRow.wp_site_path, "/marketing/");
+      assert.equal(second.website.wordpress.multisite_enabled, false);
+    }
+  },
+  {
+    name: "website administration rotates and disables credentials with history",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteAdministrationService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const firstPublicKey = registration.public_key;
+      const rotation = context.websiteAdministrationService.rotateCredentials(registration.website.id);
+      const disabledWebsite = context.websiteAdministrationService.updateWebsiteStatus(registration.website.id, "disabled");
+      const credentialEvents = context.websiteCredentialEventRepository.listByWebsiteId(registration.website.id, 10);
+      const disabledRow = context.websiteRepository.findById(registration.website.id);
+      const oldRequest = createSignedTrackingRequest({
+        authService: context.trackingAuthService,
+        publicKey: firstPublicKey,
+        secretKey: registration.secret_key,
+        timestamp: "2026-03-16T12:00:00.000Z",
+        body: {
+          installation_id: "install-1",
+          plugin_version: "1.0.0",
+          sent_at: "2026-03-16T12:00:00.000Z",
+          events: []
+        }
+      });
+      const verification = context.trackingAuthService.verifyRequest(oldRequest, {
+        now: new Date("2026-03-16T12:03:00.000Z")
+      });
+
+      assert.notEqual(rotation.public_key, firstPublicKey);
+      assert.match(rotation.secret_key, /^jfsk_/u);
+      assert.equal(disabledWebsite.status, "disabled");
+      assert.equal(Number(disabledRow.credentials_version), 2);
+      assert.ok(disabledRow.last_credentials_rotated_at);
+      assert.equal(credentialEvents.length, 3);
+      assert.ok(credentialEvents.some((row) => row.action === "created"));
+      assert.ok(credentialEvents.some((row) => row.action === "rotated"));
+      assert.ok(credentialEvents.some((row) => row.action === "disabled"));
+      assert.equal(verification.ok, false);
+      assert.equal(verification.error.code, "website_not_found");
+    }
+  },
+  {
+    name: "website administration dashboard groups websites under the same client",
+    run() {
+      const context = createTrackingTestContext();
+      context.websiteAdministrationService.createWebsite({
+        client_name: "Client A",
+        website_name: "Main Site",
+        base_url: "https://example.com",
+        wordpress: {
+          multisite_enabled: true,
+          network_id: "network-1",
+          site_id: "11",
+          site_path: "/main/"
+        }
+      });
+      const secondary = context.websiteAdministrationService.createWebsite({
+        client_name: "Client A",
+        website_name: "Store Site",
+        base_url: "https://store.example.com"
+      });
+      context.websiteAdministrationService.createWebsite({
+        client_name: "Client B",
+        website_name: "Brand Site",
+        base_url: "https://brand.example.com"
+      });
+      context.websiteAdministrationService.updateWebsiteStatus(secondary.website.id, "disabled");
+
+      const groups = context.websiteAdministrationService.listDashboardData();
+      const clientA = groups.find((group) => group.client.client_name === "Client A");
+      const clientB = groups.find((group) => group.client.client_name === "Client B");
+
+      assert.equal(groups.length, 2);
+      assert.equal(clientA.website_count, 2);
+      assert.equal(clientA.active_website_count, 1);
+      assert.equal(clientA.disabled_website_count, 1);
+      assert.equal(clientA.multisite_website_count, 1);
+      assert.equal(clientA.websites.length, 2);
+      assert.equal(clientB.website_count, 1);
+    }
+  },
+  {
+    name: "website admin html lets operators choose an existing client or add a new one",
+    async run() {
+      const context = createTrackingTestContext();
+      context.websiteAdministrationService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://client-a.example.com"
+      });
+      context.websiteAdministrationService.createWebsite({
+        client_name: "Client B",
+        website_name: "Client B Site",
+        base_url: "https://client-b.example.com"
+      });
+      const controller = new WebsiteAdminController({
+        websiteAdministrationService: context.websiteAdministrationService,
+        rulesService
+      });
+
+      const response = await controller.handleHtml();
+
+      assert.equal(response.statusCode, 200);
+      assert.match(response.body, /Choose Existing Client/iu);
+      assert.match(response.body, /Add New Client/iu);
+      assert.match(response.body, /Select an existing client/iu);
+      assert.match(response.body, /Client A/iu);
+      assert.match(response.body, /Client B/iu);
+    }
+  },
+  {
+    name: "website admin html falls back to rules clients when no tracked websites exist yet",
+    async run() {
+      const context = createTrackingTestContext();
+      const controller = new WebsiteAdminController({
+        websiteAdministrationService: context.websiteAdministrationService,
+        rulesService: {
+          createFormCatalog() {
+            return [
+              { key: "alpha", displayName: "Alpha Client" },
+              { key: "beta", displayName: "Beta Client" }
+            ];
+          }
+        }
+      });
+
+      const response = await controller.handleHtml();
+
+      assert.equal(response.statusCode, 200);
+      assert.match(response.body, /Select an existing client/iu);
+      assert.match(response.body, /Alpha Client/iu);
+      assert.match(response.body, /Beta Client/iu);
+      assert.doesNotMatch(response.body, /No clients available yet/iu);
+    }
+  },
+  {
+    name: "plugin telemetry records installation versions and history",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteAdministrationService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const website = context.websiteRepository.findById(registration.website.id);
+
+      context.pluginTelemetryService.recordHeartbeat(website, {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        wp_version: "6.8.1",
+        php_version: "8.3",
+        status: "healthy"
+      }, "2026-03-16T12:00:00.000Z");
+      context.pluginTelemetryService.recordBatch(website, {
+        installation_id: "install-1",
+        plugin_version: "1.1.0",
+        sent_at: "2026-03-16T12:05:00.000Z",
+        events: []
+      }, "2026-03-16T12:05:05.000Z");
+
+      const installation = context.websiteInstallationRepository.findByWebsiteAndInstallationId(website.id, "install-1");
+      const installationEvents = context.websiteInstallationEventRepository.listByWebsiteId(website.id, 10);
+
+      assert.equal(installation.plugin_version, "1.1.0");
+      assert.equal(installation.wp_version, "6.8.1");
+      assert.equal(installation.php_version, "8.3");
+      assert.equal(installation.status, "healthy");
+      assert.equal(installation.last_heartbeat_at, "2026-03-16T12:00:00.000Z");
+      assert.equal(installation.last_batch_received_at, "2026-03-16T12:05:05.000Z");
+      assert.equal(installation.last_sent_at, "2026-03-16T12:05:00.000Z");
+      assert.ok(installationEvents.some((row) => row.event_type === "heartbeat"));
+      assert.ok(installationEvents.some((row) => row.event_type === "batch_received"));
+      assert.ok(installationEvents.some((row) => row.event_type === "version_changed"));
+    }
+  },
+  {
+    name: "plugin telemetry stores wordpress multisite context on installations and websites",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteAdministrationService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const website = context.websiteRepository.findById(registration.website.id);
+
+      context.pluginTelemetryService.recordHeartbeat(website, {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        wp_version: "6.8.1",
+        php_version: "8.3",
+        status: "healthy",
+        wordpress: {
+          multisite_enabled: true,
+          network_id: "network-22",
+          network_name: "Acme Network",
+          site_id: "42",
+          site_url: "https://example.com/subsite",
+          site_path: "/subsite/"
+        }
+      }, "2026-03-16T12:00:00.000Z");
+
+      const installation = context.websiteInstallationRepository.findByWebsiteAndInstallationId(website.id, "install-1");
+      const websiteRow = context.websiteRepository.findById(website.id);
+
+      assert.equal(installation.wp_multisite_enabled, 1);
+      assert.equal(installation.wp_network_id, "network-22");
+      assert.equal(installation.wp_network_name, "Acme Network");
+      assert.equal(installation.wp_site_id, "42");
+      assert.equal(installation.wp_site_url, "https://example.com/subsite");
+      assert.equal(installation.wp_site_path, "/subsite/");
+      assert.equal(websiteRow.wp_multisite_enabled, 1);
+      assert.equal(websiteRow.wp_network_id, "network-22");
+      assert.equal(websiteRow.wp_site_id, "42");
+      assert.equal(websiteRow.wp_site_path, "/subsite/");
+    }
+  },
+  {
+    name: "tracking batch ingestion inserts visitors sessions and events",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const website = context.websiteRepository.findById(registration.website.id);
+      const summary = context.trackingIngestionService.ingestBatch({
+        website
+      }, {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        sent_at: "2026-03-16T12:00:00.000Z",
+        events: [{
+          event_uuid: "event-1",
+          event_type: "page_view",
+          event_name: null,
+          occurred_at: "2026-03-16T12:00:00.000Z",
+          visitor_id: "visitor-1",
+          session_id: "session-1",
+          page_url: "https://example.com/landing",
+          page_path: "/landing",
+          referrer_url: "https://www.google.com/search?q=client+a",
+          utm: {
+            source: "google",
+            medium: "cpc",
+            campaign: "spring_launch",
+            term: "tracking",
+            content: "hero"
+          },
+          click_ids: {
+            gclid: "gclid-1",
+            fbclid: null,
+            msclkid: null,
+            ttclid: null
+          },
+          meta: {
+            channel: "paid_search",
+            source_category: "search",
+            engagement_seconds: 18
+          }
+        }]
+      });
+
+      assert.equal(summary.received, 1);
+      assert.equal(summary.inserted, 1);
+      assert.equal(summary.duplicates, 0);
+      assert.equal(summary.conversions_created, 0);
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM visitors").get().count, 1);
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 1);
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM tracking_events").get().count, 1);
+
+      const session = context.database.prepare(`
+        SELECT pageviews, utm_source, utm_medium, utm_campaign, gclid, channel, source_category
+        FROM sessions
+        WHERE session_uuid = 'session-1'
+      `).get();
+      const websiteRow = context.websiteRepository.findById(registration.website.id);
+
+      assert.equal(session.pageviews, 1);
+      assert.equal(session.utm_source, "google");
+      assert.equal(session.utm_medium, "cpc");
+      assert.equal(session.utm_campaign, "spring_launch");
+      assert.equal(session.gclid, "gclid-1");
+      assert.equal(session.channel, "paid_search");
+      assert.equal(session.source_category, "search");
+      assert.equal(websiteRow.installed_plugin_version, "1.0.0");
+      assert.ok(websiteRow.last_seen_at);
+    }
+  },
+  {
+    name: "tracking ingestion respects consent mode for denied analytics events",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com",
+        config_json: {
+          respect_consent_mode: true
+        }
+      });
+      const website = context.websiteRepository.findById(registration.website.id);
+      const summary = context.trackingIngestionService.ingestBatch({
+        website
+      }, {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        sent_at: "2026-03-16T12:00:00.000Z",
+        events: [
+          {
+            event_uuid: "event-denied",
+            event_type: "page_view",
+            event_name: null,
+            occurred_at: "2026-03-16T12:00:00.000Z",
+            visitor_id: "visitor-1",
+            session_id: "session-1",
+            page_url: "https://example.com/landing",
+            page_path: "/landing",
+            referrer_url: null,
+            utm: {},
+            click_ids: {},
+            consent: {
+              analytics_storage: "denied"
+            },
+            meta: {}
+          },
+          {
+            event_uuid: "event-consent",
+            event_type: "consent_update",
+            event_name: null,
+            occurred_at: "2026-03-16T12:01:00.000Z",
+            visitor_id: "visitor-1",
+            session_id: "session-1",
+            page_url: null,
+            page_path: null,
+            referrer_url: null,
+            utm: {},
+            click_ids: {},
+            consent: {
+              analytics_storage: "denied"
+            },
+            meta: {}
+          }
+        ]
+      });
+      const session = context.database.prepare(`
+        SELECT consent_state_json
+        FROM sessions
+        WHERE session_uuid = 'session-1'
+      `).get();
+
+      assert.equal(summary.received, 2);
+      assert.equal(summary.inserted, 1);
+      assert.equal(summary.skipped_due_to_consent, 1);
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM tracking_events").get().count, 1);
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 1);
+      assert.equal(JSON.parse(session.consent_state_json).analytics_storage, "denied");
+    }
+  },
+  {
+    name: "tracking ingestion ignores duplicate event uuids cleanly",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const website = context.websiteRepository.findById(registration.website.id);
+      const payload = {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        sent_at: "2026-03-16T12:00:00.000Z",
+        events: [{
+          event_uuid: "event-duplicate",
+          event_type: "page_view",
+          event_name: null,
+          occurred_at: "2026-03-16T12:00:00.000Z",
+          visitor_id: "visitor-1",
+          session_id: "session-1",
+          page_url: "https://example.com/landing",
+          page_path: "/landing",
+          referrer_url: null,
+          utm: {},
+          click_ids: {},
+          meta: {}
+        }]
+      };
+
+      const first = context.trackingIngestionService.ingestBatch({ website }, payload);
+      const second = context.trackingIngestionService.ingestBatch({ website }, payload);
+      const session = context.database.prepare(`
+        SELECT pageviews
+        FROM sessions
+        WHERE session_uuid = 'session-1'
+      `).get();
+
+      assert.equal(first.inserted, 1);
+      assert.equal(first.duplicates, 0);
+      assert.equal(second.inserted, 0);
+      assert.equal(second.duplicates, 1);
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM tracking_events").get().count, 1);
+      assert.equal(session.pageviews, 1);
+    }
+  },
+  {
+    name: "analytics reporting builds attribution models and rollups",
+    run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const website = context.websiteRepository.findById(registration.website.id);
+
+      context.trackingIngestionService.ingestBatch({ website }, {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        sent_at: "2026-03-16T09:00:00.000Z",
+        events: [{
+          event_uuid: "event-first",
+          event_type: "page_view",
+          event_name: null,
+          occurred_at: "2026-03-16T09:00:00.000Z",
+          visitor_id: "visitor-1",
+          session_id: "session-1",
+          page_url: "https://example.com/landing",
+          page_path: "/landing",
+          referrer_url: "https://www.google.com/search?q=brand",
+          utm: {
+            source: "google",
+            medium: "cpc",
+            campaign: "spring_launch",
+            term: null,
+            content: null
+          },
+          click_ids: {},
+          consent: {},
+          meta: {
+            channel: "paid_search",
+            source_category: "search"
+          }
+        }]
+      });
+      context.trackingIngestionService.ingestBatch({ website }, {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        sent_at: "2026-03-17T10:00:00.000Z",
+        events: [
+          {
+            event_uuid: "event-second",
+            event_type: "page_view",
+            event_name: null,
+            occurred_at: "2026-03-17T10:00:00.000Z",
+            visitor_id: "visitor-1",
+            session_id: "session-2",
+            page_url: "https://example.com/pricing",
+            page_path: "/pricing",
+            referrer_url: "https://mail.example.com/click",
+            utm: {
+              source: "newsletter",
+              medium: "email",
+              campaign: "march_news",
+              term: null,
+              content: null
+            },
+            click_ids: {},
+            consent: {},
+            meta: {
+              channel: "email",
+              source_category: "owned"
+            }
+          },
+          {
+            event_uuid: "event-conversion",
+            event_type: "conversion",
+            event_name: "demo_request",
+            occurred_at: "2026-03-17T10:05:00.000Z",
+            visitor_id: "visitor-1",
+            session_id: "session-2",
+            page_url: "https://example.com/pricing",
+            page_path: "/pricing",
+            referrer_url: "https://mail.example.com/click",
+            utm: {
+              source: "newsletter",
+              medium: "email",
+              campaign: "march_news",
+              term: null,
+              content: null
+            },
+            click_ids: {},
+            consent: {},
+            meta: {
+              channel: "email",
+              source_category: "owned",
+              value: 250
+            }
+          }
+        ]
+      });
+
+      const firstTouch = context.analyticsReportingService.buildReport({
+        websiteId: website.id,
+        dateFrom: "2026-03-16",
+        dateTo: "2026-03-17",
+        model: "first_touch"
+      });
+      const lastTouch = context.analyticsReportingService.buildReport({
+        websiteId: website.id,
+        dateFrom: "2026-03-16",
+        dateTo: "2026-03-17",
+        model: "last_touch"
+      });
+      const attributionRows = context.conversionAttributionRepository.listByWebsiteId(website.id, "last_touch");
+
+      assert.equal(firstTouch.summary.attributed_conversions, 1);
+      assert.equal(lastTouch.summary.attributed_conversions, 1);
+      assert.equal(firstTouch.breakdowns.sources[0].label, "google");
+      assert.equal(lastTouch.breakdowns.sources[0].label, "newsletter");
+      assert.equal(lastTouch.breakdowns.channels[0].label, "email");
+      assert.equal(lastTouch.summary.attributed_conversion_value, 250);
+      assert.equal(attributionRows.length, 1);
+      assert.equal(attributionRows[0].utm_source, "newsletter");
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM analytics_daily_traffic_rollups").get().count >= 2, true);
+      assert.equal(context.database.prepare("SELECT COUNT(*) AS count FROM analytics_daily_conversion_rollups").get().count >= 3, true);
+    }
+  },
+  {
+    name: "plugin config endpoint returns default tracking config",
+    async run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const controller = new TrackingController({
+        trackingAuthService: context.trackingAuthService,
+        trackingIngestionService: context.trackingIngestionService,
+        pluginConfigService: new PluginConfigService(),
+        websiteRepository: context.websiteRepository,
+        pluginTelemetryService: context.pluginTelemetryService
+      });
+      const timestamp = new Date().toISOString();
+      const request = createSignedTrackingRequest({
+        authService: context.trackingAuthService,
+        method: "GET",
+        path: "/api/v1/plugin/config",
+        publicKey: registration.public_key,
+        secretKey: registration.secret_key,
+        timestamp,
+        body: null
+      });
+
+      const response = await controller.handleConfig(request);
+      const body = JSON.parse(response.body);
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(body.website_id, registration.website.id);
+      assert.equal(body.website_name, "Client A Site");
+      assert.equal(body.config_version, 1);
+      assert.equal(body.session_timeout_minutes, 30);
+      assert.equal(body.cookie_retention_days, 90);
+      assert.equal(body.track_scroll, true);
+      assert.equal(body.track_outbound_clicks, true);
+      assert.equal(body.track_phone_clicks, true);
+      assert.equal(body.track_file_downloads, true);
+      assert.equal(body.respect_consent_mode, false);
+      assert.deepEqual(body.excluded_roles, []);
+    }
+  },
+  {
+    name: "reporting controller returns report json for a selected website",
+    async run() {
+      const context = createTrackingTestContext();
+      const registration = context.websiteProvisioningService.createWebsite({
+        client_name: "Client A",
+        website_name: "Client A Site",
+        base_url: "https://example.com"
+      });
+      const website = context.websiteRepository.findById(registration.website.id);
+
+      context.trackingIngestionService.ingestBatch({ website }, {
+        installation_id: "install-1",
+        plugin_version: "1.0.0",
+        sent_at: "2026-03-17T10:00:00.000Z",
+        events: [{
+          event_uuid: "event-report",
+          event_type: "conversion",
+          event_name: "lead",
+          occurred_at: "2026-03-17T10:00:00.000Z",
+          visitor_id: "visitor-1",
+          session_id: "session-1",
+          page_url: "https://example.com/contact",
+          page_path: "/contact",
+          referrer_url: null,
+          utm: {
+            source: "direct",
+            medium: "none",
+            campaign: "brand",
+            term: null,
+            content: null
+          },
+          click_ids: {},
+          consent: {},
+          meta: {
+            channel: "website",
+            source_category: "direct",
+            value: 100
+          }
+        }]
+      });
+
+      const controller = new ReportingController({
+        analyticsReportingService: context.analyticsReportingService
+      });
+      const response = await controller.handleJson({
+        query: {
+          website_id: String(website.id),
+          date_from: "2026-03-17",
+          date_to: "2026-03-17",
+          model: "last_touch"
+        }
+      });
+      const body = JSON.parse(response.body);
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(body.filters.website_id, website.id);
+      assert.equal(body.summary.attributed_conversions, 1);
+      assert.equal(body.recent_conversions.length, 1);
+    }
   }
 ];
 
@@ -2237,6 +3078,178 @@ function buildTrackerHeaderRow() {
     "Bit.ly",
     "Client Code"
   ];
+}
+
+function createTrackingTestContext() {
+  const database = new DatabaseSync(":memory:");
+  applyTrackingMigrations(database);
+  const clientRepository = new ClientRepository(database);
+  const websiteRepository = new WebsiteRepository(database);
+  const visitorRepository = new VisitorRepository(database);
+  const sessionRepository = new SessionRepository(database);
+  const trackingEventRepository = new TrackingEventRepository(database);
+  const conversionRepository = new ConversionRepository(database);
+  const websiteInstallationRepository = new WebsiteInstallationRepository(database);
+  const websiteInstallationEventRepository = new WebsiteInstallationEventRepository(database);
+  const websiteCredentialEventRepository = new WebsiteCredentialEventRepository(database);
+  const conversionAttributionRepository = new ConversionAttributionRepository(database);
+  const analyticsRollupRepository = new AnalyticsRollupRepository(database);
+  const trackingAuthService = new TrackingAuthService({
+    websiteRepository,
+    encryptionKey: "test-tracking-encryption-key",
+    maxAgeSeconds: 300,
+    logger: nullLogger
+  });
+  const websiteProvisioningService = new WebsiteProvisioningService({
+    clientRepository,
+    websiteRepository,
+    trackingAuthService
+  });
+  const pluginTelemetryService = new PluginTelemetryService({
+    websiteRepository,
+    websiteInstallationRepository,
+    websiteInstallationEventRepository
+  });
+  const analyticsReportingService = new AnalyticsReportingService({
+    database,
+    websiteRepository,
+    conversionAttributionRepository,
+    analyticsRollupRepository
+  });
+  const websiteAdministrationService = new WebsiteAdministrationService({
+    clientRepository,
+    websiteRepository,
+    websiteProvisioningService,
+    websiteInstallationRepository,
+    websiteInstallationEventRepository,
+    websiteCredentialEventRepository,
+    trackingAuthService
+  });
+  const trackingIngestionService = new TrackingIngestionService({
+    database,
+    websiteRepository,
+    visitorRepository,
+    sessionRepository,
+    trackingEventRepository,
+    conversionRepository,
+    pluginTelemetryService,
+    analyticsReportingService,
+    logger: nullLogger
+  });
+
+  return {
+    database,
+    clientRepository,
+    websiteRepository,
+    visitorRepository,
+    sessionRepository,
+    trackingEventRepository,
+    conversionRepository,
+    websiteInstallationRepository,
+    websiteInstallationEventRepository,
+    websiteCredentialEventRepository,
+    conversionAttributionRepository,
+    analyticsRollupRepository,
+    trackingAuthService,
+    websiteProvisioningService,
+    pluginTelemetryService,
+    analyticsReportingService,
+    websiteAdministrationService,
+    trackingIngestionService
+  };
+}
+
+function applyTrackingMigrations(database) {
+  const migrationDirectory = new URL("../database/migrations/", import.meta.url);
+  const files = fs.readdirSync(migrationDirectory)
+    .filter((file) => file.endsWith(".sql"))
+    .sort((left, right) => left.localeCompare(right));
+
+  files.forEach((file) => {
+    database.exec(fs.readFileSync(new URL(`../database/migrations/${file}`, import.meta.url), "utf8"));
+  });
+}
+
+function createSignedTrackingRequest({
+  authService,
+  publicKey,
+  secretKey,
+  method = "POST",
+  path = "/api/v1/tracking/events/batch",
+  timestamp,
+  body
+}) {
+  const rawBody = body === null || body === undefined
+    ? ""
+    : JSON.stringify(body);
+  const signature = authService.sign(secretKey, timestamp, rawBody);
+
+  return createMockRequest({
+    method,
+    path,
+    rawBody,
+    headers: {
+      "x-jf-public-key": publicKey,
+      "x-jf-timestamp": timestamp,
+      "x-jf-signature": signature
+    }
+  });
+}
+
+function createMockRequest({
+  method = "POST",
+  path = "/",
+  rawBody = "",
+  headers = {}
+}) {
+  const normalizedHeaders = {};
+  Object.entries(headers).forEach(([key, value]) => {
+    normalizedHeaders[String(key).toLowerCase()] = value;
+  });
+
+  return {
+    method,
+    path,
+    headers: normalizedHeaders,
+    rawBody,
+    query: {},
+    header(name, defaultValue = null) {
+      return this.headers[String(name).toLowerCase()] ?? defaultValue;
+    },
+    parseJson() {
+      const trimmed = String(this.rawBody ?? "").trim();
+      if (!trimmed) {
+        return {
+          ok: false,
+          errorCode: "missing_body",
+          errorMessage: "Expected a JSON payload."
+        };
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return {
+            ok: false,
+            errorCode: "unsupported_payload_shape",
+            errorMessage: "Expected a JSON object payload."
+          };
+        }
+
+        return {
+          ok: true,
+          value: parsed
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          errorCode: "invalid_json",
+          errorMessage: "Request body was not valid JSON.",
+          parseError: error.message
+        };
+      }
+    }
+  };
 }
 
 function buildWorkbookFixtureBase64({ sheets }) {

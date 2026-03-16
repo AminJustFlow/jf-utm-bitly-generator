@@ -56,6 +56,10 @@ export default {
     baseUrl: "https://api.qrserver.com/v1/create-qr-code/",
     size: "300x300"
   },
+  tracking: {
+    secretEncryptionKey: "",
+    signatureMaxAgeSeconds: 300
+  },
   libraryAuth: {
     enabled: true,
     username: "justflow",

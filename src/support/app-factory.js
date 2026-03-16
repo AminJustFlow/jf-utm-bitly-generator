@@ -15,9 +15,23 @@ import { ClickUpWebhookController } from "../controllers/clickup-webhook-control
 import { UtmLibraryController } from "../controllers/utm-library-controller.js";
 import { UtmBuilderController } from "../controllers/utm-builder-controller.js";
 import { UtmImportController } from "../controllers/utm-import-controller.js";
+import { TrackingController } from "../controllers/tracking-controller.js";
+import { WebsiteAdminController } from "../controllers/website-admin-controller.js";
+import { ReportingController } from "../controllers/reporting-controller.js";
 import { RequestRepository } from "../repositories/request-repository.js";
 import { GeneratedLinkRepository } from "../repositories/generated-link-repository.js";
 import { AuditLogRepository } from "../repositories/audit-log-repository.js";
+import { ClientRepository } from "../repositories/client-repository.js";
+import { WebsiteRepository } from "../repositories/website-repository.js";
+import { VisitorRepository } from "../repositories/visitor-repository.js";
+import { SessionRepository } from "../repositories/session-repository.js";
+import { TrackingEventRepository } from "../repositories/tracking-event-repository.js";
+import { ConversionRepository } from "../repositories/conversion-repository.js";
+import { WebsiteInstallationRepository } from "../repositories/website-installation-repository.js";
+import { WebsiteInstallationEventRepository } from "../repositories/website-installation-event-repository.js";
+import { WebsiteCredentialEventRepository } from "../repositories/website-credential-event-repository.js";
+import { ConversionAttributionRepository } from "../repositories/conversion-attribution-repository.js";
+import { AnalyticsRollupRepository } from "../repositories/analytics-rollup-repository.js";
 import { RulesService } from "../services/rules-service.js";
 import { UrlService } from "../services/url-service.js";
 import { FingerprintService } from "../services/fingerprint-service.js";
@@ -41,6 +55,13 @@ import { BasicAuthService } from "../services/basic-auth-service.js";
 import { XlsxWorkbookReader } from "../services/xlsx-workbook-reader.js";
 import { TrackerImportService } from "../services/tracker-import-service.js";
 import { ReceivedRequestRecoveryService } from "../services/received-request-recovery-service.js";
+import { TrackingAuthService } from "../services/tracking-auth-service.js";
+import { TrackingIngestionService } from "../services/tracking-ingestion-service.js";
+import { PluginConfigService } from "../services/plugin-config-service.js";
+import { WebsiteProvisioningService } from "../services/website-provisioning-service.js";
+import { PluginTelemetryService } from "../services/plugin-telemetry-service.js";
+import { WebsiteAdministrationService } from "../services/website-administration-service.js";
+import { AnalyticsReportingService } from "../services/analytics-reporting-service.js";
 
 export async function createApplication(projectRoot) {
   loadEnvFile(path.join(projectRoot, ".env"));
@@ -59,6 +80,17 @@ export async function createApplication(projectRoot) {
   const requestRepository = new RequestRepository(database);
   const generatedLinkRepository = new GeneratedLinkRepository(database);
   const auditLogRepository = new AuditLogRepository(database);
+  const clientRepository = new ClientRepository(database);
+  const websiteRepository = new WebsiteRepository(database);
+  const visitorRepository = new VisitorRepository(database);
+  const sessionRepository = new SessionRepository(database);
+  const trackingEventRepository = new TrackingEventRepository(database);
+  const conversionRepository = new ConversionRepository(database);
+  const websiteInstallationRepository = new WebsiteInstallationRepository(database);
+  const websiteInstallationEventRepository = new WebsiteInstallationEventRepository(database);
+  const websiteCredentialEventRepository = new WebsiteCredentialEventRepository(database);
+  const conversionAttributionRepository = new ConversionAttributionRepository(database);
+  const analyticsRollupRepository = new AnalyticsRollupRepository(database);
   const utmLibraryService = new UtmLibraryService(requestRepository);
   const rulesService = new RulesService(rules);
   const urlService = new UrlService();
@@ -76,6 +108,12 @@ export async function createApplication(projectRoot) {
   const clickUpChatService = new ClickUpChatService(httpClient, config.clickup);
   const messageFormatter = new MessageFormatter();
   const libraryAuthService = new BasicAuthService(config.libraryAuth);
+  const trackingAuthService = new TrackingAuthService({
+    websiteRepository,
+    encryptionKey: config.tracking.secretEncryptionKey,
+    maxAgeSeconds: config.tracking.signatureMaxAgeSeconds,
+    logger
+  });
   const workbookReader = new XlsxWorkbookReader();
   const linkGenerationService = new LinkGenerationService({
     generatedLinkRepository,
@@ -109,6 +147,43 @@ export async function createApplication(projectRoot) {
     fingerprintService,
     urlService,
     qrCodeService
+  });
+  const pluginConfigService = new PluginConfigService();
+  const websiteProvisioningService = new WebsiteProvisioningService({
+    clientRepository,
+    websiteRepository,
+    trackingAuthService
+  });
+  const pluginTelemetryService = new PluginTelemetryService({
+    websiteRepository,
+    websiteInstallationRepository,
+    websiteInstallationEventRepository
+  });
+  const analyticsReportingService = new AnalyticsReportingService({
+    database,
+    websiteRepository,
+    conversionAttributionRepository,
+    analyticsRollupRepository
+  });
+  const websiteAdministrationService = new WebsiteAdministrationService({
+    clientRepository,
+    websiteRepository,
+    websiteProvisioningService,
+    websiteInstallationRepository,
+    websiteInstallationEventRepository,
+    websiteCredentialEventRepository,
+    trackingAuthService
+  });
+  const trackingIngestionService = new TrackingIngestionService({
+    database,
+    websiteRepository,
+    visitorRepository,
+    sessionRepository,
+    trackingEventRepository,
+    conversionRepository,
+    pluginTelemetryService,
+    analyticsReportingService,
+    logger
   });
   const receivedRequestRecoveryService = new ReceivedRequestRecoveryService({
     requestRepository,
@@ -149,9 +224,32 @@ export async function createApplication(projectRoot) {
   const utmImportController = new UtmImportController({
     trackerImportService
   });
+  const trackingController = new TrackingController({
+    trackingAuthService,
+    trackingIngestionService,
+    pluginConfigService,
+    websiteRepository,
+    pluginTelemetryService
+  });
+  const websiteAdminController = new WebsiteAdminController({
+    websiteAdministrationService,
+    rulesService
+  });
+  const reportingController = new ReportingController({
+    analyticsReportingService
+  });
 
   const router = new Router();
   router.add("GET", "/health", (request) => healthController.handle(request));
+  router.add("POST", "/api/v1/tracking/events/batch", (request) => trackingController.handleBatch(request));
+  router.add("GET", "/api/v1/plugin/config", (request) => trackingController.handleConfig(request));
+  router.add("POST", "/api/v1/plugin/heartbeat", (request) => trackingController.handleHeartbeat(request));
+  router.add("GET", "/admin/websites", protectLibraryRoute(libraryAuthService, (request) => websiteAdminController.handleHtml(request)));
+  router.add("POST", "/admin/websites", protectLibraryRoute(libraryAuthService, (request) => websiteAdminController.handleCreate(request)));
+  router.add("POST", "/admin/websites/rotate", protectLibraryRoute(libraryAuthService, (request) => websiteAdminController.handleRotate(request)));
+  router.add("POST", "/admin/websites/status", protectLibraryRoute(libraryAuthService, (request) => websiteAdminController.handleStatus(request)));
+  router.add("GET", "/admin/reports", protectLibraryRoute(libraryAuthService, (request) => reportingController.handleHtml(request)));
+  router.add("GET", "/admin/reports.json", protectLibraryRoute(libraryAuthService, (request) => reportingController.handleJson(request)));
   router.add("GET", "/new", protectLibraryRoute(libraryAuthService, (request) => utmBuilderController.handleHtml(request)));
   router.add("POST", "/new", protectLibraryRoute(libraryAuthService, (request) => utmBuilderController.handleCreate(request)));
   router.add("GET", "/imports", protectLibraryRoute(libraryAuthService, (request) => utmImportController.handleHtml(request)));
@@ -235,6 +333,10 @@ function resolveConfig(projectRoot) {
     qr: {
       baseUrl: process.env.QR_BASE_URL ?? baseConfig.qr.baseUrl,
       size: process.env.QR_SIZE ?? baseConfig.qr.size
+    },
+    tracking: {
+      secretEncryptionKey: process.env.TRACKING_SECRET_ENCRYPTION_KEY ?? baseConfig.tracking.secretEncryptionKey,
+      signatureMaxAgeSeconds: Number(process.env.TRACKING_SIGNATURE_MAX_AGE_SECONDS ?? baseConfig.tracking.signatureMaxAgeSeconds)
     },
     libraryAuth: {
       enabled: parseBoolean(process.env.LIBRARY_AUTH_ENABLED, baseConfig.libraryAuth.enabled),

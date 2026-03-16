@@ -25,6 +25,53 @@ This is the Node.js port of the internal JF Link Generator Bot for ClickUp Chat.
 8. Generates a QR image URL when the request implies offline or QR usage.
 9. Posts the result back into the same ClickUp Chat channel or thread.
 
+## Centralized Website Tracking Foundation
+
+This phase extends the app into a real central tracking hub for WordPress client websites. The backend now supports signed plugin traffic, client-level website grouping, per-site credential administration, multisite-aware installation telemetry, consent-aware event ingestion, and internal attribution reporting.
+
+What was added:
+
+- website registrations with per-site public and secret credentials
+- client records so one client can own many monitored websites inside the same app
+- internal admin UI for listing websites by client, provisioning new sites, rotating credentials, and disabling access
+- signed plugin API authentication using `X-JF-Public-Key`, `X-JF-Timestamp`, and `X-JF-Signature`
+- new persistence tables for websites, visitors, sessions, tracking events, and conversions
+- multisite-aware WordPress context storage for network id, network name, site id, and site path
+- installation telemetry tables for heartbeat, batch, config-fetch, and version-change history
+- default per-website tracking config storage and normalization
+- richer tracking event support including scroll, outbound click, phone click, file download, session lifecycle, consent updates, and custom events
+- consent-aware ingestion when `respect_consent_mode=true`
+- conversion attribution models for first touch, last touch, and last non-direct
+- daily traffic and conversion rollups plus internal reporting endpoints
+
+New routes:
+
+- `POST /api/v1/tracking/events/batch`
+- `GET /api/v1/plugin/config`
+- `POST /api/v1/plugin/heartbeat`
+- `GET /admin/websites`
+- `POST /admin/websites`
+- `POST /admin/websites/rotate`
+- `POST /admin/websites/status`
+- `GET /admin/reports`
+- `GET /admin/reports.json`
+  - all protected with the same HTTP Basic auth used by the internal library and builder routes
+
+Signed auth model:
+
+- each website gets a `public_key` plus a one-time `secret_key`
+- the plain secret is shown only once when the website is provisioned
+- the app stores both a non-reversible hash and an encrypted copy of the secret
+- requests sign `<timestamp>.<raw-body>` with HMAC SHA256
+- timestamps outside the configured freshness window are rejected
+
+Current limitations:
+
+- WordPress plugin packaging and distribution are still outside this repo
+- reporting is intentionally lightweight and SQLite-backed; there is no external warehouse or scheduled job system yet
+- attribution rollups are recalculated inside the app and should be revisited if event volume grows substantially
+- this phase persists raw tracking and telemetry data first; advanced attribution, aggregation, and plugin-side UX still evolve in later phases
+
 ## Project Structure
 
 ```text
@@ -145,6 +192,8 @@ Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, whi
 - `BITLY_GROUP_GUID`
 - `QR_BASE_URL`
 - `QR_SIZE`
+- `TRACKING_SECRET_ENCRYPTION_KEY`
+- `TRACKING_SIGNATURE_MAX_AGE_SECONDS`
 - `LIBRARY_AUTH_ENABLED`
 - `LIBRARY_AUTH_USERNAME`
 - `LIBRARY_AUTH_PASSWORD`
@@ -166,6 +215,24 @@ Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, whi
   - JSON export of the current filtered library view
 - `GET /utms.csv`
   - CSV export of the current filtered library view
+- `POST /api/v1/tracking/events/batch`
+  - signed plugin ingestion endpoint for first-party event batches
+- `GET /api/v1/plugin/config`
+  - signed plugin config endpoint returning normalized website tracking settings
+- `POST /api/v1/plugin/heartbeat`
+  - signed plugin heartbeat endpoint for site status and plugin version reporting
+- `GET /admin/websites`
+  - internal client and website admin UI with grouped website cards
+- `POST /admin/websites`
+  - internal JSON route for provisioning website credentials
+- `POST /admin/websites/rotate`
+  - internal JSON route for rotating one website's credentials
+- `POST /admin/websites/status`
+  - internal JSON route for enabling or disabling one website
+- `GET /admin/reports`
+  - internal attribution and traffic reporting UI
+- `GET /admin/reports.json`
+  - JSON reporting endpoint for the selected site/date range/model
 - `GET /debug/sample-payload`
   - only when `APP_DEBUG=true` or `DEBUG_WEBHOOK=true`
 - `GET /debug/webhook-info`
@@ -193,8 +260,34 @@ Recommended first-run process:
 - Self-message ignore lists are supported to avoid bot loops.
 - Logs redact common sensitive keys.
 - The builder and UTM library routes use HTTP Basic auth by default.
+- Website tracking routes use per-website HMAC signatures instead of the ClickUp shared-secret model.
+- Tracking secrets require `TRACKING_SECRET_ENCRYPTION_KEY` so the server can decrypt stored site secrets for signature verification.
   - Default credentials: `justflow` / `preview`
   - Override them with `LIBRARY_AUTH_USERNAME` and `LIBRARY_AUTH_PASSWORD`
+
+## Attribution And Reporting
+
+The reporting layer currently ships with:
+
+- first-touch attribution
+- last-touch attribution
+- last-non-direct attribution
+- daily traffic rollups for visitors, sessions, pageviews, events, engaged sessions, and raw conversions
+- daily attributed conversion rollups for channel, source category, source, medium, and campaign
+
+The internal reporting UI lives at `/admin/reports`. It recalculates rollups for the selected website before rendering the current summary.
+
+## Plugin Telemetry
+
+Each authenticated site can now accumulate installation history under the internal website admin screen:
+
+- heartbeat events
+- batch-received events
+- config-fetch events
+- version-change events
+- multisite-aware network and site metadata for WordPress multisite installs
+
+This makes it possible to inspect plugin version drift, stale installs, credential rotation history, and which monitored sites belong to the same client or multisite network without querying SQLite manually.
 
 ## Testing
 
