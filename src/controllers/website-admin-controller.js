@@ -177,8 +177,8 @@ function renderHtml(view) {
     ${renderAppShellStyles()}
     .hero,.panel,.card{background:var(--panel);border:1px solid var(--line);border-radius:1.35rem;box-shadow:var(--shadow)}
     .hero,.panel{padding:1rem 1.05rem;margin-bottom:1rem}
-    .hero-top,.panel-head,.client-head,.card-head,.stats,.actions,.chips,.tables,.client-metrics{display:flex;gap:1rem;flex-wrap:wrap}
-    .hero-top,.panel-head,.client-head,.card-head{justify-content:space-between;align-items:flex-end}
+    .hero-top,.panel-head,.client-head,.stats,.actions,.chips,.client-metrics,.website-card-meta,.website-actions{display:flex;gap:1rem;flex-wrap:wrap}
+    .hero-top,.panel-head,.client-head{justify-content:space-between;align-items:flex-end}
     h1,h2,h3,h4{margin:0;font-family:"Aptos Display","Trebuchet MS",sans-serif}
     h1{font-size:clamp(2.1rem,4.8vw,3.2rem);letter-spacing:-.05em;line-height:.96}
     h2{font-size:1.35rem;letter-spacing:-.04em}
@@ -208,11 +208,20 @@ function renderHtml(view) {
     .chip.error{background:#fff3f0;color:var(--danger)}
     .client-section{display:grid;gap:1rem}
     .card{padding:1rem;display:grid;gap:1rem;background:linear-gradient(180deg,rgba(255,255,255,.82),rgba(255,249,240,.92))}
+    .website-card-top{display:grid;gap:1rem;grid-template-columns:minmax(0,1fr) auto;align-items:start}
+    .website-card-intro{display:grid;gap:.35rem}
+    .website-card-meta{gap:.55rem}
+    .website-actions{justify-content:flex-end;align-items:center;gap:.65rem}
+    .website-meta-grid{display:grid;gap:.85rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))}
     .meta-tile,.table-card,.secret-panel,.context-panel{padding:.85rem .9rem;border:1px solid var(--line);border-radius:1rem;background:rgba(255,255,255,.76)}
     .meta-tile strong,.context-panel strong{display:block;font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.35rem}
     .context-panel{display:grid;gap:.75rem}
-    .tables{align-items:flex-start}
-    .table-card{flex:1 1 22rem}
+    .context-value,.meta-value{display:block;line-height:1.5;word-break:break-word}
+    .meta-tile code,.table-card code{display:block;line-height:1.5;word-break:break-all}
+    .tables{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));align-items:start}
+    .table-card{display:grid;gap:.75rem;min-width:0}
+    .table-card h4{margin:0}
+    .table-scroll{overflow:auto}
     table{width:100%;border-collapse:collapse;font-size:.9rem}
     th,td{text-align:left;padding:.55rem .35rem;border-bottom:1px dashed rgba(23,48,42,.12);vertical-align:top}
     th{font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
@@ -226,7 +235,8 @@ function renderHtml(view) {
     .status.success{color:var(--accent)}
     .empty{padding:2.6rem 1rem;text-align:center;border:1px dashed rgba(23,48,42,.16);border-radius:1.2rem;background:rgba(255,255,255,.55)}
     [hidden]{display:none!important}
-    @media (max-width:1180px){.panel-grid.has-secret,.meta-grid,.form-grid-three,.form-grid-four{grid-template-columns:1fr}.tables{flex-direction:column}}
+    @media (max-width:1180px){.panel-grid.has-secret,.meta-grid,.form-grid-three,.form-grid-four{grid-template-columns:1fr}}
+    @media (max-width:900px){.website-card-top{grid-template-columns:1fr}.website-actions{justify-content:flex-start}}
     @media (max-width:640px){.shell{padding-inline:.85rem}.hero,.panel,.card{border-radius:1rem}}
   </style>
 </head>
@@ -483,46 +493,56 @@ function renderWebsiteCard(entry) {
   const website = entry.website;
   const latestInstallation = entry.latest_installation;
   const nextStatus = website.status === "active" ? "disabled" : "active";
+  const latestInstallMarkup = latestInstallation
+    ? `<code>${escapeHtml(latestInstallation.installation_id)}</code><span class="meta-value">Plugin ${escapeHtml(latestInstallation.plugin_version || "unknown")}</span>`
+    : `<span class="meta-value">No installation telemetry yet.</span>`;
 
   return `<article class="card">
-    <div class="card-head">
-      <div>
-        <div class="meta">${escapeHtml(website.environment)} - ${escapeHtml(website.platform_type)} - ${escapeHtml(website.wordpress.multisite_enabled ? "multisite" : "single-site")}</div>
+    <div class="website-card-top">
+      <div class="website-card-intro">
+        <div class="website-card-meta">
+          <span class="chip">${escapeHtml(website.environment)}</span>
+          <span class="chip">${escapeHtml(website.platform_type)}</span>
+          <span class="chip">${escapeHtml(website.wordpress.multisite_enabled ? "multisite" : "single-site")}</span>
+        </div>
         <h3>${escapeHtml(website.website_name)}</h3>
         <div class="muted">${escapeHtml(website.base_url)}</div>
       </div>
-      <div class="chips">
+      <div class="website-actions">
         <span class="chip${website.status === "disabled" ? " error" : ""}">${escapeHtml(website.status)}</span>
         <span class="chip">Credentials v${escapeHtml(website.credentials_version ?? 1)}</span>
         <button class="mini-button" type="button" data-rotate-website-id="${website.id}">Rotate Credentials</button>
         <button class="${website.status === "active" ? "danger-button" : "mini-button"}" type="button" data-status-website-id="${website.id}" data-next-status="${nextStatus}">${website.status === "active" ? "Disable" : "Enable"}</button>
       </div>
     </div>
-    <div class="meta-grid">
+    <div class="website-meta-grid">
       <div class="meta-tile"><strong>Public Key</strong><code>${escapeHtml(website.public_key)}</code></div>
-      <div class="meta-tile"><strong>Last Seen</strong><span>${escapeHtml(formatDate(website.last_seen_at))}</span></div>
-      <div class="meta-tile"><strong>Latest Plugin</strong><span>${escapeHtml(website.installed_plugin_version || "--")}</span></div>
-      <div class="meta-tile"><strong>Latest Install</strong><span>${escapeHtml(latestInstallation ? `${latestInstallation.installation_id} (${latestInstallation.plugin_version || "unknown"})` : "No installation telemetry yet")}</span></div>
-      <div class="meta-tile"><strong>WordPress Context</strong><span>${renderWebsiteContext(website.wordpress)}</span></div>
+      <div class="meta-tile"><strong>Last Seen</strong><span class="meta-value">${escapeHtml(formatDate(website.last_seen_at))}</span></div>
+      <div class="meta-tile"><strong>Latest Plugin</strong><span class="meta-value">${escapeHtml(website.installed_plugin_version || "--")}</span></div>
+      <div class="meta-tile"><strong>Latest Install</strong>${latestInstallMarkup}</div>
+    </div>
+    <div class="context-panel">
+      <strong>WordPress Context</strong>
+      <span class="context-value">${renderWebsiteContext(website.wordpress)}</span>
     </div>
     <div class="tables">
       <section class="table-card">
         <h4>Installations</h4>
         ${entry.installations.length === 0
     ? `<div class="meta">No batches or heartbeats have been received yet.</div>`
-    : `<table><thead><tr><th>Installation</th><th>Versions</th><th>Site Context</th><th>Status</th><th>Last Seen</th></tr></thead><tbody>${entry.installations.map((installation) => `<tr><td><code>${escapeHtml(installation.installation_id)}</code></td><td>Plugin ${escapeHtml(installation.plugin_version || "--")}<br>WP ${escapeHtml(installation.wp_version || "--")} - PHP ${escapeHtml(installation.php_version || "--")}</td><td>${renderInstallationContext(installation)}</td><td>${escapeHtml(installation.status)}</td><td>${escapeHtml(formatDate(installation.last_seen_at))}</td></tr>`).join("")}</tbody></table>`}
+    : `<div class="table-scroll"><table><thead><tr><th>Installation</th><th>Versions</th><th>Site Context</th><th>Status</th><th>Last Seen</th></tr></thead><tbody>${entry.installations.map((installation) => `<tr><td><code>${escapeHtml(installation.installation_id)}</code></td><td><span class="meta-value">Plugin ${escapeHtml(installation.plugin_version || "--")}</span><span class="meta-value">WP ${escapeHtml(installation.wp_version || "--")} - PHP ${escapeHtml(installation.php_version || "--")}</span></td><td>${renderInstallationContext(installation)}</td><td>${escapeHtml(installation.status)}</td><td>${escapeHtml(formatDate(installation.last_seen_at))}</td></tr>`).join("")}</tbody></table></div>`}
       </section>
       <section class="table-card">
         <h4>Installation History</h4>
         ${entry.installation_events.length === 0
     ? `<div class="meta">No installation history yet.</div>`
-    : `<table><thead><tr><th>Type</th><th>Version</th><th>Status</th><th>Occurred</th></tr></thead><tbody>${entry.installation_events.map((row) => `<tr><td>${escapeHtml(row.event_type)}</td><td>${escapeHtml(row.plugin_version || "--")}</td><td>${escapeHtml(row.status || "--")}</td><td>${escapeHtml(formatDate(row.occurred_at))}</td></tr>`).join("")}</tbody></table>`}
+    : `<div class="table-scroll"><table><thead><tr><th>Type</th><th>Version</th><th>Status</th><th>Occurred</th></tr></thead><tbody>${entry.installation_events.map((row) => `<tr><td>${escapeHtml(row.event_type)}</td><td>${escapeHtml(row.plugin_version || "--")}</td><td>${escapeHtml(row.status || "--")}</td><td>${escapeHtml(formatDate(row.occurred_at))}</td></tr>`).join("")}</tbody></table></div>`}
       </section>
       <section class="table-card">
         <h4>Credential History</h4>
         ${entry.credential_events.length === 0
     ? `<div class="meta">No credential history yet.</div>`
-    : `<table><thead><tr><th>Action</th><th>Version</th><th>Public Key</th><th>At</th></tr></thead><tbody>${entry.credential_events.map((row) => `<tr><td>${escapeHtml(row.action)}</td><td>v${escapeHtml(row.credentials_version)}</td><td><code>${escapeHtml(row.public_key)}</code></td><td>${escapeHtml(formatDate(row.created_at))}</td></tr>`).join("")}</tbody></table>`}
+    : `<div class="table-scroll"><table><thead><tr><th>Action</th><th>Version</th><th>Public Key</th><th>At</th></tr></thead><tbody>${entry.credential_events.map((row) => `<tr><td>${escapeHtml(row.action)}</td><td>v${escapeHtml(row.credentials_version)}</td><td><code>${escapeHtml(row.public_key)}</code></td><td>${escapeHtml(formatDate(row.created_at))}</td></tr>`).join("")}</tbody></table></div>`}
       </section>
     </div>
   </article>`;
