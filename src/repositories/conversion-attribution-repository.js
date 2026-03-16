@@ -32,7 +32,6 @@ export class ConversionAttributionRepository {
 
   deleteByWebsiteAndConversionIds(websiteId, conversionIds) {
     if (!Array.isArray(conversionIds) || conversionIds.length === 0) {
-      this.deleteByWebsite(websiteId);
       return;
     }
 

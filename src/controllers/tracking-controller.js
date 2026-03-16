@@ -10,13 +10,15 @@ export class TrackingController {
     trackingIngestionService,
     pluginConfigService,
     websiteRepository,
-    pluginTelemetryService = null
+    pluginTelemetryService = null,
+    websiteObservabilityEventRepository = null
   }) {
     this.trackingAuthService = trackingAuthService;
     this.trackingIngestionService = trackingIngestionService;
     this.pluginConfigService = pluginConfigService;
     this.websiteRepository = websiteRepository;
     this.pluginTelemetryService = pluginTelemetryService;
+    this.websiteObservabilityEventRepository = websiteObservabilityEventRepository;
   }
 
   async handleBatch(request) {
@@ -27,20 +29,61 @@ export class TrackingController {
 
     const parsedBody = request.parseJson();
     if (!parsedBody.ok) {
+      this.recordIngestionFailure(auth.context.website, {
+        installationId: extractInstallationId(request.rawBody),
+        pluginVersion: extractPluginVersion(request.rawBody),
+        code: parsedBody.errorCode,
+        message: parsedBody.errorMessage,
+        details: {
+          path: request.path,
+          method: request.method
+        }
+      });
       return badRequest(parsedBody.errorCode, parsedBody.errorMessage);
     }
 
     const validated = validateTrackingBatchPayload(parsedBody.value);
     if (!validated.ok) {
+      this.recordIngestionFailure(auth.context.website, {
+        installationId: stringValue(parsedBody.value.installation_id),
+        pluginVersion: stringValue(parsedBody.value.plugin_version),
+        code: validated.code,
+        message: validated.message,
+        details: {
+          path: request.path,
+          method: request.method
+        }
+      });
       return badRequest(validated.code, validated.message);
     }
 
-    const summary = this.trackingIngestionService.ingestBatch(auth.context, validated.value);
+    try {
+      const summary = this.trackingIngestionService.ingestBatch(auth.context, validated.value);
 
-    return NodeResponse.json({
-      status: "ok",
-      summary
-    });
+      return NodeResponse.json({
+        status: "ok",
+        summary
+      });
+    } catch (error) {
+      this.recordIngestionFailure(auth.context.website, {
+        installationId: stringValue(validated.value.installation_id),
+        pluginVersion: stringValue(validated.value.plugin_version),
+        code: error.code ?? "ingestion_failed",
+        message: error.message,
+        details: {
+          path: request.path,
+          method: request.method
+        }
+      });
+
+      return NodeResponse.json({
+        status: "error",
+        error: {
+          code: "tracking_ingestion_failed",
+          message: "Tracking batch ingestion failed."
+        }
+      }, 500);
+    }
   }
 
   async handleConfig(request) {
@@ -113,6 +156,29 @@ export class TrackingController {
       context: auth
     };
   }
+
+  recordIngestionFailure(website, {
+    installationId = null,
+    pluginVersion = null,
+    code = "ingestion_failed",
+    message = "Tracking batch ingestion failed.",
+    details = {}
+  } = {}) {
+    if (!this.websiteObservabilityEventRepository || !website?.id) {
+      return;
+    }
+
+    this.websiteObservabilityEventRepository.create({
+      websiteId: Number(website.id),
+      installationId,
+      pluginVersion,
+      eventType: "ingestion_failure",
+      errorCode: code,
+      message,
+      detailsJson: details,
+      occurredAt: new Date().toISOString()
+    });
+  }
 }
 
 function badRequest(code, message) {
@@ -128,4 +194,26 @@ function badRequest(code, message) {
 function stringValue(value) {
   const normalized = String(value ?? "").trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function extractInstallationId(rawBody) {
+  return stringValue(parseRequestBodyObject(rawBody)?.installation_id);
+}
+
+function extractPluginVersion(rawBody) {
+  return stringValue(parseRequestBodyObject(rawBody)?.plugin_version);
+}
+
+function parseRequestBodyObject(rawBody) {
+  const normalized = String(rawBody ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(normalized);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }

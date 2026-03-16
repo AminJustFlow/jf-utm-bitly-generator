@@ -27,6 +27,7 @@ export class VisitorRepository {
         last_seen_at,
         lead_email_hash,
         lead_phone_hash,
+        stitched_profile_id,
         metadata_json
       ) VALUES (
         :website_id,
@@ -35,6 +36,7 @@ export class VisitorRepository {
         :last_seen_at,
         :lead_email_hash,
         :lead_phone_hash,
+        :stitched_profile_id,
         :metadata_json
       )
     `).run({
@@ -44,6 +46,7 @@ export class VisitorRepository {
       last_seen_at: payload.lastSeenAt,
       lead_email_hash: payload.leadEmailHash ?? null,
       lead_phone_hash: payload.leadPhoneHash ?? null,
+      stitched_profile_id: payload.stitchedProfileId ?? null,
       metadata_json: encodeJson(payload.metadataJson ?? {})
     });
 
@@ -67,6 +70,22 @@ export class VisitorRepository {
       lead_email_hash: fields.leadEmailHash ?? null,
       lead_phone_hash: fields.leadPhoneHash ?? null,
       metadata_json: fields.metadataJson ? encodeJson(fields.metadataJson) : null
+    });
+  }
+
+  assignStitchedProfile(id, stitchedProfileId, updatedAt = new Date().toISOString()) {
+    this.database.prepare(`
+      UPDATE visitors
+      SET stitched_profile_id = :stitched_profile_id,
+          last_seen_at = CASE
+            WHEN last_seen_at IS NULL OR last_seen_at < :updated_at THEN :updated_at
+            ELSE last_seen_at
+          END
+      WHERE id = :id
+    `).run({
+      id,
+      stitched_profile_id: stitchedProfileId,
+      updated_at: updatedAt
     });
   }
 }

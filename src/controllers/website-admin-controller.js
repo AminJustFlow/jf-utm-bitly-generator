@@ -18,16 +18,24 @@ export class WebsiteAdminController {
     });
     const clientGroups = this.websiteAdministrationService.listDashboardData();
     const websiteEntries = clientGroups.flatMap((group) => group.websites);
+    const thresholds = this.websiteAdministrationService.healthThresholds();
     const summary = {
       totalClients: clientGroups.length,
       totalWebsites: websiteEntries.length,
+      healthyWebsites: websiteEntries.filter((entry) => entry.health.status === "healthy").length,
+      staleWebsites: websiteEntries.filter((entry) => entry.health.status === "stale").length,
+      misconfiguredWebsites: websiteEntries.filter((entry) => entry.health.status === "misconfigured").length,
+      failingWebsites: websiteEntries.filter((entry) => entry.health.status === "failing").length,
+      warningWebsites: websiteEntries.filter((entry) => entry.health.warnings.length > 0).length,
+      recentAuthFailures: websiteEntries.reduce((sum, entry) => sum + Number(entry.health.recent_auth_failure_count ?? 0), 0),
+      recentIngestionFailures: websiteEntries.reduce((sum, entry) => sum + Number(entry.health.recent_ingestion_failure_count ?? 0), 0),
       activeWebsites: websiteEntries.filter((entry) => entry.website.status === "active").length,
       disabledWebsites: websiteEntries.filter((entry) => entry.website.status === "disabled").length,
       multisiteWebsites: websiteEntries.filter((entry) => entry.website.wordpress.multisite_enabled).length,
       totalInstallations: websiteEntries.reduce((sum, entry) => sum + entry.installation_count, 0)
     };
 
-    return NodeResponse.text(renderHtml({ clients, clientGroups, summary }), 200, {
+    return NodeResponse.text(renderHtml({ clients, clientGroups, summary, thresholds }), 200, {
       "Content-Type": "text/html; charset=utf-8"
     });
   }
@@ -162,7 +170,7 @@ function positiveInteger(value) {
 }
 
 function renderHtml(view) {
-  const { clients, clientGroups, summary } = view;
+  const { clients, clientGroups, summary, thresholds } = view;
 
   return `<!doctype html>
 <html lang="en">
@@ -205,6 +213,8 @@ function renderHtml(view) {
     .mini-button,.danger-button{min-height:2.2rem;padding:.45rem .8rem;font-size:.84rem}
     .danger-button{background:#fff3f0;border-color:rgba(180,67,43,.22);color:var(--danger)}
     .chip{display:inline-flex;align-items:center;padding:.38rem .74rem;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.72);font-size:.82rem}
+    .chip.success{background:#ecfaf4;color:#18734c}
+    .chip.warn{background:#fff7e7;color:#8b6421}
     .chip.error{background:#fff3f0;color:var(--danger)}
     .client-section{display:grid;gap:1rem}
     .card{padding:1rem;display:grid;gap:1rem;background:linear-gradient(180deg,rgba(255,255,255,.82),rgba(255,249,240,.92))}
@@ -247,14 +257,20 @@ function renderHtml(view) {
       <div class="hero-top">
         <div>
           <h1>Website Admin</h1>
-          <p class="lede">Provision websites under shared clients, keep multisite-aware WordPress context on each monitored site, and inspect installation and credential history from one protected screen.</p>
+          <p class="lede">Provision websites under shared clients, inspect operational health, and catch stale, misconfigured, or failing plugin installations before reporting silently drifts.</p>
+          <p class="meta">Stale after ${thresholds.stale_hours}h. Heartbeat gaps warn after ${thresholds.heartbeat_gap_hours}h. Traffic gaps warn after ${thresholds.traffic_gap_hours}h.</p>
         </div>
       </div>
       <div class="stats">
         <div class="stat"><strong>${summary.totalClients}</strong><span>Clients</span></div>
         <div class="stat"><strong>${summary.totalWebsites}</strong><span>Websites</span></div>
-        <div class="stat"><strong>${summary.multisiteWebsites}</strong><span>Multisite Sites</span></div>
-        <div class="stat"><strong>${summary.activeWebsites}</strong><span>Active</span></div>
+        <div class="stat"><strong>${summary.healthyWebsites}</strong><span>Healthy</span></div>
+        <div class="stat"><strong>${summary.staleWebsites}</strong><span>Stale</span></div>
+        <div class="stat"><strong>${summary.misconfiguredWebsites}</strong><span>Misconfigured</span></div>
+        <div class="stat"><strong>${summary.failingWebsites}</strong><span>Failing</span></div>
+        <div class="stat"><strong>${summary.warningWebsites}</strong><span>With Warnings</span></div>
+        <div class="stat"><strong>${summary.recentAuthFailures}</strong><span>Recent Auth Failures</span></div>
+        <div class="stat"><strong>${summary.recentIngestionFailures}</strong><span>Recent Ingestion Failures</span></div>
         <div class="stat"><strong>${summary.totalInstallations}</strong><span>Known Installs</span></div>
       </div>
     </section>
@@ -476,12 +492,17 @@ function renderClientGroup(group) {
         <span class="chip${group.client?.status === "disabled" ? " error" : ""}">${escapeHtml(group.client?.status ?? "active")}</span>
         <span class="chip">${escapeHtml(group.active_website_count)} active sites</span>
         <span class="chip">${escapeHtml(group.active_installation_count)} active installs</span>
+        <span class="chip success">${escapeHtml(group.healthy_website_count)} healthy</span>
+        <span class="chip warn">${escapeHtml(group.stale_website_count)} stale</span>
+        <span class="chip${group.failing_website_count > 0 ? " error" : ""}">${escapeHtml(group.failing_website_count)} failing</span>
       </div>
     </div>
     <div class="client-metrics">
       <div class="client-metric"><strong>${group.website_count}</strong><span>Tracked Websites</span></div>
       <div class="client-metric"><strong>${group.multisite_website_count}</strong><span>Multisite Websites</span></div>
       <div class="client-metric"><strong>${group.installation_count}</strong><span>Plugin Installations</span></div>
+      <div class="client-metric"><strong>${group.auth_failure_count}</strong><span>Auth Failures</span></div>
+      <div class="client-metric"><strong>${group.ingestion_failure_count}</strong><span>Ingestion Failures</span></div>
     </div>
     <div class="website-grid">
       ${group.websites.map(renderWebsiteCard).join("")}
@@ -491,6 +512,7 @@ function renderClientGroup(group) {
 
 function renderWebsiteCard(entry) {
   const website = entry.website;
+  const health = entry.health;
   const latestInstallation = entry.latest_installation;
   const nextStatus = website.status === "active" ? "disabled" : "active";
   const latestInstallMarkup = latestInstallation
@@ -509,16 +531,24 @@ function renderWebsiteCard(entry) {
         <div class="muted">${escapeHtml(website.base_url)}</div>
       </div>
       <div class="website-actions">
+        <span class="chip ${healthChipClass(health.status)}">${escapeHtml(healthStatusLabel(health.status))}</span>
         <span class="chip${website.status === "disabled" ? " error" : ""}">${escapeHtml(website.status)}</span>
         <span class="chip">Credentials v${escapeHtml(website.credentials_version ?? 1)}</span>
         <button class="mini-button" type="button" data-rotate-website-id="${website.id}">Rotate Credentials</button>
         <button class="${website.status === "active" ? "danger-button" : "mini-button"}" type="button" data-status-website-id="${website.id}" data-next-status="${nextStatus}">${website.status === "active" ? "Disable" : "Enable"}</button>
       </div>
     </div>
+    ${health.warnings.length > 0 ? `<div class="chips">${health.warnings.map((warning) => `<span class="chip warn">${escapeHtml(warning.label)}</span>`).join("")}</div>` : ""}
     <div class="website-meta-grid">
+      <div class="meta-tile"><strong>Health</strong><span class="meta-value">${escapeHtml(healthStatusLabel(health.status))}</span></div>
       <div class="meta-tile"><strong>Public Key</strong><code>${escapeHtml(website.public_key)}</code></div>
+      <div class="meta-tile"><strong>Config / Plugin</strong><span class="meta-value">Config v${escapeHtml(website.config_version)}</span><span class="meta-value">Plugin ${escapeHtml(website.installed_plugin_version || "--")}</span></div>
       <div class="meta-tile"><strong>Last Seen</strong><span class="meta-value">${escapeHtml(formatDate(website.last_seen_at))}</span></div>
-      <div class="meta-tile"><strong>Latest Plugin</strong><span class="meta-value">${escapeHtml(website.installed_plugin_version || "--")}</span></div>
+      <div class="meta-tile"><strong>Last Heartbeat</strong><span class="meta-value">${escapeHtml(formatDate(health.last_heartbeat_at))}</span></div>
+      <div class="meta-tile"><strong>Last Event Batch</strong><span class="meta-value">${escapeHtml(formatDate(health.last_batch_received_at))}</span></div>
+      <div class="meta-tile"><strong>Last Conversion</strong><span class="meta-value">${escapeHtml(formatDate(health.last_conversion_at))}</span></div>
+      <div class="meta-tile"><strong>Auth Failures</strong><span class="meta-value">${health.auth_failure_count} total</span><span class="meta-value">${health.recent_auth_failure_count} recent</span></div>
+      <div class="meta-tile"><strong>Ingestion Failures</strong><span class="meta-value">${health.ingestion_failure_count} total</span><span class="meta-value">${health.recent_ingestion_failure_count} recent</span></div>
       <div class="meta-tile"><strong>Latest Install</strong>${latestInstallMarkup}</div>
     </div>
     <div class="context-panel">
@@ -530,7 +560,7 @@ function renderWebsiteCard(entry) {
         <h4>Installations</h4>
         ${entry.installations.length === 0
     ? `<div class="meta">No batches or heartbeats have been received yet.</div>`
-    : `<div class="table-scroll"><table><thead><tr><th>Installation</th><th>Versions</th><th>Site Context</th><th>Status</th><th>Last Seen</th></tr></thead><tbody>${entry.installations.map((installation) => `<tr><td><code>${escapeHtml(installation.installation_id)}</code></td><td><span class="meta-value">Plugin ${escapeHtml(installation.plugin_version || "--")}</span><span class="meta-value">WP ${escapeHtml(installation.wp_version || "--")} - PHP ${escapeHtml(installation.php_version || "--")}</span></td><td>${renderInstallationContext(installation)}</td><td>${escapeHtml(installation.status)}</td><td>${escapeHtml(formatDate(installation.last_seen_at))}</td></tr>`).join("")}</tbody></table></div>`}
+    : `<div class="table-scroll"><table><thead><tr><th>Installation</th><th>Health</th><th>Versions</th><th>Last Heartbeat</th><th>Last Batch</th><th>Last Config</th><th>Site Context</th></tr></thead><tbody>${entry.installations.map((installation) => `<tr><td><code>${escapeHtml(installation.installation_id)}</code></td><td><span class="chip ${healthChipClass(installation.health.status)}">${escapeHtml(healthStatusLabel(installation.health.status))}</span><span class="meta-value">Auth ${installation.health.auth_failure_count} - Ingest ${installation.health.ingestion_failure_count}</span></td><td><span class="meta-value">Plugin ${escapeHtml(installation.plugin_version || "--")}</span><span class="meta-value">WP ${escapeHtml(installation.wp_version || "--")} - PHP ${escapeHtml(installation.php_version || "--")}</span></td><td>${escapeHtml(formatDate(installation.last_heartbeat_at))}</td><td>${escapeHtml(formatDate(installation.last_batch_received_at))}</td><td>${escapeHtml(formatDate(installation.last_config_fetched_at))}</td><td>${renderInstallationContext(installation)}</td></tr>`).join("")}</tbody></table></div>`}
       </section>
       <section class="table-card">
         <h4>Installation History</h4>
@@ -543,6 +573,12 @@ function renderWebsiteCard(entry) {
         ${entry.credential_events.length === 0
     ? `<div class="meta">No credential history yet.</div>`
     : `<div class="table-scroll"><table><thead><tr><th>Action</th><th>Version</th><th>Public Key</th><th>At</th></tr></thead><tbody>${entry.credential_events.map((row) => `<tr><td>${escapeHtml(row.action)}</td><td>v${escapeHtml(row.credentials_version)}</td><td><code>${escapeHtml(row.public_key)}</code></td><td>${escapeHtml(formatDate(row.created_at))}</td></tr>`).join("")}</tbody></table></div>`}
+      </section>
+      <section class="table-card">
+        <h4>Operational Alerts</h4>
+        ${entry.observability_events.length === 0
+    ? `<div class="meta">No auth or ingestion failures have been recorded.</div>`
+    : `<div class="table-scroll"><table><thead><tr><th>Type</th><th>Install</th><th>Code</th><th>Message</th><th>Occurred</th></tr></thead><tbody>${entry.observability_events.map((row) => `<tr><td>${escapeHtml(row.event_type)}</td><td>${escapeHtml(row.installation_id || "--")}</td><td>${escapeHtml(row.error_code || "--")}</td><td>${escapeHtml(row.message)}</td><td>${escapeHtml(formatDate(row.occurred_at))}</td></tr>`).join("")}</tbody></table></div>`}
       </section>
     </div>
   </article>`;
@@ -613,6 +649,41 @@ function escapeHtml(value) {
     .replace(/>/gu, "&gt;")
     .replace(/"/gu, "&quot;")
     .replace(/'/gu, "&#39;");
+}
+
+function healthStatusLabel(status) {
+  switch (String(status ?? "").trim().toLowerCase()) {
+    case "healthy":
+      return "Healthy";
+    case "stale":
+      return "Stale";
+    case "misconfigured":
+      return "Misconfigured";
+    case "failing":
+      return "Failing";
+    case "warning":
+      return "Warning";
+    case "disabled":
+      return "Disabled";
+    default:
+      return "Unknown";
+  }
+}
+
+function healthChipClass(status) {
+  switch (String(status ?? "").trim().toLowerCase()) {
+    case "healthy":
+      return "success";
+    case "stale":
+    case "warning":
+    case "misconfigured":
+      return "warn";
+    case "failing":
+    case "disabled":
+      return "error";
+    default:
+      return "";
+  }
 }
 
 function mergeClientOptions({ trackedClients, catalogClients }) {

@@ -54,4 +54,30 @@ export class ConversionRepository {
 
     return Number(result.changes ?? 0) > 0 ? Number(result.lastInsertRowid) : null;
   }
+
+  listLastSubmittedByWebsiteIds(websiteIds) {
+    const ids = normalizeIds(websiteIds);
+    if (ids.length === 0) {
+      return [];
+    }
+
+    return this.database.prepare(`
+      SELECT
+        website_id,
+        MAX(submitted_at) AS last_conversion_at
+      FROM conversions
+      WHERE website_id IN (${ids.join(", ")})
+      GROUP BY website_id
+      ORDER BY website_id ASC
+    `).all().map((row) => ({
+      website_id: Number(row.website_id),
+      last_conversion_at: row.last_conversion_at ?? null
+    }));
+  }
+}
+
+function normalizeIds(values) {
+  return values
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
 }

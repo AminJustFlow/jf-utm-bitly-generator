@@ -9,6 +9,8 @@ export class TrackingIngestionService {
     trackingEventRepository,
     conversionRepository,
     pluginTelemetryService = null,
+    analyticsRefreshService = null,
+    identityStitchingService = null,
     analyticsReportingService = null,
     logger = null
   }) {
@@ -19,6 +21,8 @@ export class TrackingIngestionService {
     this.trackingEventRepository = trackingEventRepository;
     this.conversionRepository = conversionRepository;
     this.pluginTelemetryService = pluginTelemetryService;
+    this.analyticsRefreshService = analyticsRefreshService;
+    this.identityStitchingService = identityStitchingService;
     this.analyticsReportingService = analyticsReportingService;
     this.logger = logger;
   }
@@ -81,11 +85,20 @@ export class TrackingIngestionService {
         }
 
         summary.inserted += 1;
+        const leadEmailHash = stringValue(event.meta.lead_email_hash);
+        const leadPhoneHash = stringValue(event.meta.lead_phone_hash);
         this.visitorRepository.touchLastSeen(visitor.id, {
           lastSeenAt: event.occurred_at,
-          leadEmailHash: stringValue(event.meta.lead_email_hash),
-          leadPhoneHash: stringValue(event.meta.lead_phone_hash)
+          leadEmailHash,
+          leadPhoneHash
         });
+        const stitchedProfileId = this.identityStitchingService?.stitchVisitor(website, visitor, {
+          leadEmailHash,
+          leadPhoneHash
+        }, receivedAt);
+        if (stitchedProfileId) {
+          visitor.stitched_profile_id = stitchedProfileId;
+        }
 
         const updatedSession = this.updateSessionAfterEvent(session, event, sessionCache, receivedAt);
         if (incrementsPageviews(event.event_type)) {
@@ -135,7 +148,16 @@ export class TrackingIngestionService {
 
     if (summary.inserted > 0) {
       try {
-        this.analyticsReportingService?.refreshWebsite(website.id);
+        const affectedBounds = deriveAffectedBounds(payload.events);
+        if (this.analyticsRefreshService) {
+          this.analyticsRefreshService.enqueueWebsiteRefresh(website.id, {
+            dateFrom: affectedBounds.dateFrom,
+            dateTo: affectedBounds.dateTo,
+            reason: "tracking_batch"
+          });
+        } else {
+          this.analyticsReportingService?.refreshWebsite(website.id, affectedBounds);
+        }
       } catch (error) {
         this.logger?.error?.("Tracking analytics refresh failed.", {
           websiteId: website.id,
@@ -205,6 +227,8 @@ export class TrackingIngestionService {
         qrId: stringValue(event.meta.qr_id),
         channel: stringValue(event.meta.channel),
         sourceCategory: stringValue(event.meta.source_category),
+        deviceType: extractDeviceType(event.meta),
+        browserName: extractBrowserName(event.meta),
         isDirect: deriveIsDirect(event),
         pageviews: 0,
         engagementSeconds: numericValue(event.meta.engagement_seconds) ?? 0,
@@ -280,7 +304,9 @@ function buildSessionPatch(session, event, receivedAt) {
     ["ttclid", event.click_ids.ttclid],
     ["qr_id", stringValue(event.meta.qr_id)],
     ["channel", stringValue(event.meta.channel)],
-    ["source_category", stringValue(event.meta.source_category)]
+    ["source_category", stringValue(event.meta.source_category)],
+    ["device_type", extractDeviceType(event.meta)],
+    ["browser_name", extractBrowserName(event.meta)]
   ];
 
   fillIfMissing.forEach(([field, value]) => {
@@ -441,4 +467,30 @@ function shouldSkipEventForConsent(websiteConfig, event) {
 function hasConsentState(consent) {
   return Boolean(consent)
     && Object.values(consent).some((value) => value === "granted" || value === "denied");
+}
+
+function extractDeviceType(meta) {
+  return stringValue(meta?.device_type ?? meta?.device);
+}
+
+function extractBrowserName(meta) {
+  return stringValue(meta?.browser_name ?? meta?.browser);
+}
+
+function deriveAffectedBounds(events) {
+  const dates = events
+    .map((event) => String(event?.occurred_at ?? "").slice(0, 10))
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/u.test(value))
+    .sort((left, right) => left.localeCompare(right));
+
+  if (dates.length === 0) {
+    return {
+      fullRebuild: true
+    };
+  }
+
+  return {
+    dateFrom: dates[0],
+    dateTo: dates[dates.length - 1]
+  };
 }

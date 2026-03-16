@@ -3,13 +3,9 @@ export class AnalyticsRollupRepository {
     this.database = database;
   }
 
-  replaceTrafficRollups(websiteId, rows, timestamp = new Date().toISOString()) {
-    this.database.prepare(`
-      DELETE FROM analytics_daily_traffic_rollups
-      WHERE website_id = :website_id
-    `).run({
-      website_id: websiteId
-    });
+  replaceTrafficRollups(websiteId, rows, options = {}) {
+    const { timestamp, bounds } = normalizeOptions(options);
+    this.deleteRows("analytics_daily_traffic_rollups", websiteId, bounds, "rollup_date");
 
     const statement = this.database.prepare(`
       INSERT INTO analytics_daily_traffic_rollups (
@@ -53,13 +49,61 @@ export class AnalyticsRollupRepository {
     });
   }
 
-  replaceConversionRollups(websiteId, rows, timestamp = new Date().toISOString()) {
-    this.database.prepare(`
-      DELETE FROM analytics_daily_conversion_rollups
-      WHERE website_id = :website_id
-    `).run({
-      website_id: websiteId
+  replaceDimensionRollups(websiteId, rows, options = {}) {
+    const { timestamp, bounds } = normalizeOptions(options);
+    this.deleteRows("analytics_daily_dimension_rollups", websiteId, bounds, "report_date");
+
+    const statement = this.database.prepare(`
+      INSERT INTO analytics_daily_dimension_rollups (
+        website_id,
+        report_date,
+        dimension_type,
+        dimension_key,
+        sessions,
+        engaged_sessions,
+        pageviews,
+        events,
+        conversions,
+        conversion_value,
+        created_at,
+        updated_at
+      ) VALUES (
+        :website_id,
+        :report_date,
+        :dimension_type,
+        :dimension_key,
+        :sessions,
+        :engaged_sessions,
+        :pageviews,
+        :events,
+        :conversions,
+        :conversion_value,
+        :created_at,
+        :updated_at
+      )
+    `);
+
+    rows.forEach((row) => {
+      statement.run({
+        website_id: websiteId,
+        report_date: row.reportDate,
+        dimension_type: row.dimensionType,
+        dimension_key: row.dimensionKey,
+        sessions: row.sessions,
+        engaged_sessions: row.engagedSessions,
+        pageviews: row.pageviews,
+        events: row.events,
+        conversions: row.conversions,
+        conversion_value: row.conversionValue,
+        created_at: timestamp,
+        updated_at: timestamp
+      });
     });
+  }
+
+  replaceConversionRollups(websiteId, rows, options = {}) {
+    const { timestamp, bounds } = normalizeOptions(options);
+    this.deleteRows("analytics_daily_conversion_rollups", websiteId, bounds, "rollup_date");
 
     const statement = this.database.prepare(`
       INSERT INTO analytics_daily_conversion_rollups (
@@ -114,4 +158,40 @@ export class AnalyticsRollupRepository {
       });
     });
   }
+
+  deleteRows(tableName, websiteId, bounds, dateColumn) {
+    if (bounds?.dateFrom && bounds?.dateTo) {
+      this.database.prepare(`
+        DELETE FROM ${tableName}
+        WHERE website_id = :website_id
+          AND ${dateColumn} BETWEEN :date_from AND :date_to
+      `).run({
+        website_id: websiteId,
+        date_from: bounds.dateFrom,
+        date_to: bounds.dateTo
+      });
+      return;
+    }
+
+    this.database.prepare(`
+      DELETE FROM ${tableName}
+      WHERE website_id = :website_id
+    `).run({
+      website_id: websiteId
+    });
+  }
+}
+
+function normalizeOptions(options) {
+  if (typeof options === "string") {
+    return {
+      timestamp: options,
+      bounds: null
+    };
+  }
+
+  return {
+    timestamp: options.timestamp ?? new Date().toISOString(),
+    bounds: options.bounds ?? null
+  };
 }

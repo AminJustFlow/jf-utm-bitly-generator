@@ -5,17 +5,23 @@ export class WebsiteAdministrationService {
     clientRepository,
     websiteRepository,
     websiteProvisioningService,
+    conversionRepository,
     websiteInstallationRepository,
     websiteInstallationEventRepository,
     websiteCredentialEventRepository,
+    websiteObservabilityEventRepository,
+    websiteHealthService,
     trackingAuthService
   }) {
     this.clientRepository = clientRepository;
     this.websiteRepository = websiteRepository;
     this.websiteProvisioningService = websiteProvisioningService;
+    this.conversionRepository = conversionRepository;
     this.websiteInstallationRepository = websiteInstallationRepository;
     this.websiteInstallationEventRepository = websiteInstallationEventRepository;
     this.websiteCredentialEventRepository = websiteCredentialEventRepository;
+    this.websiteObservabilityEventRepository = websiteObservabilityEventRepository;
+    this.websiteHealthService = websiteHealthService;
     this.trackingAuthService = trackingAuthService;
   }
 
@@ -76,28 +82,70 @@ export class WebsiteAdministrationService {
     return this.clientRepository.list().map((client) => toPublicClient(client));
   }
 
-  listDashboardData() {
+  listDashboardData({ referenceTime = new Date() } = {}) {
     const clients = this.clientRepository.list();
     const websites = this.websiteRepository.list();
     const installations = this.websiteInstallationRepository.listAll();
+    const websiteIds = websites.map((website) => Number(website.id));
     const installationsByWebsite = groupBy(installations, "website_id");
+    const lastConversionsByWebsite = groupRows(
+      this.conversionRepository.listLastSubmittedByWebsiteIds(websiteIds),
+      "website_id"
+    );
+    const recentSince = this.websiteHealthService.recentSince(referenceTime);
+    const observabilitySummaries = this.websiteObservabilityEventRepository
+      .summarizeByWebsiteIds(websiteIds, recentSince);
+    const websiteObservability = buildWebsiteObservabilityMap(observabilitySummaries);
+    const installationObservability = buildInstallationObservabilityMap(observabilitySummaries);
     const websitesByClient = new Map();
     const clientOrder = [];
 
     websites.forEach((website) => {
       const websiteInstallations = installationsByWebsite.get(String(website.id)) ?? [];
+      const lastConversion = lastConversionsByWebsite.get(String(website.id))?.[0]?.last_conversion_at ?? null;
+      const websiteObservabilitySummary = websiteObservability.get(String(website.id)) ?? emptyObservabilitySummary();
+      const recentAlerts = this.websiteObservabilityEventRepository.listByWebsiteId(website.id, 8);
       const clientKey = website.client_id === null || website.client_id === undefined
         ? `name:${String(website.client_name ?? "").toLowerCase()}`
         : `id:${website.client_id}`;
       const existingGroup = websitesByClient.get(clientKey);
       const entry = {
         website: toPublicWebsite(website),
+        health: this.websiteHealthService.buildWebsiteHealth({
+          website,
+          installations: websiteInstallations,
+          lastConversionAt: lastConversion,
+          authFailureCount: websiteObservabilitySummary.auth_failure.total_count,
+          recentAuthFailureCount: websiteObservabilitySummary.auth_failure.recent_count,
+          lastAuthFailureAt: websiteObservabilitySummary.auth_failure.last_occurred_at,
+          ingestionFailureCount: websiteObservabilitySummary.ingestion_failure.total_count,
+          recentIngestionFailureCount: websiteObservabilitySummary.ingestion_failure.recent_count,
+          lastIngestionFailureAt: websiteObservabilitySummary.ingestion_failure.last_occurred_at,
+          referenceTime
+        }),
         installation_count: websiteInstallations.length,
         active_installation_count: websiteInstallations.filter((installation) => installation.status === "active").length,
         latest_installation: websiteInstallations[0] ?? null,
-        installations: websiteInstallations,
+        installations: websiteInstallations.map((installation) => {
+          const installationKey = `${website.id}:${installation.installation_id}`;
+          const observability = installationObservability.get(installationKey) ?? emptyObservabilitySummary();
+          return {
+            ...installation,
+            health: this.websiteHealthService.buildInstallationHealth({
+              installation,
+              authFailureCount: observability.auth_failure.total_count,
+              recentAuthFailureCount: observability.auth_failure.recent_count,
+              lastAuthFailureAt: observability.auth_failure.last_occurred_at,
+              ingestionFailureCount: observability.ingestion_failure.total_count,
+              recentIngestionFailureCount: observability.ingestion_failure.recent_count,
+              lastIngestionFailureAt: observability.ingestion_failure.last_occurred_at,
+              referenceTime
+            })
+          };
+        }),
         installation_events: this.websiteInstallationEventRepository.listByWebsiteId(website.id, 12),
-        credential_events: this.websiteCredentialEventRepository.listByWebsiteId(website.id, 12)
+        credential_events: this.websiteCredentialEventRepository.listByWebsiteId(website.id, 12),
+        observability_events: recentAlerts
       };
 
       if (existingGroup) {
@@ -122,11 +170,22 @@ export class WebsiteAdministrationService {
         active_website_count: websiteEntries.filter((entry) => entry.website.status === "active").length,
         disabled_website_count: websiteEntries.filter((entry) => entry.website.status === "disabled").length,
         multisite_website_count: websiteEntries.filter((entry) => entry.website.wordpress.multisite_enabled).length,
+        healthy_website_count: websiteEntries.filter((entry) => entry.health.status === "healthy").length,
+        stale_website_count: websiteEntries.filter((entry) => entry.health.status === "stale").length,
+        misconfigured_website_count: websiteEntries.filter((entry) => entry.health.status === "misconfigured").length,
+        failing_website_count: websiteEntries.filter((entry) => entry.health.status === "failing").length,
+        warning_website_count: websiteEntries.filter((entry) => entry.health.warnings.length > 0).length,
+        auth_failure_count: websiteEntries.reduce((sum, entry) => sum + entry.health.auth_failure_count, 0),
+        ingestion_failure_count: websiteEntries.reduce((sum, entry) => sum + entry.health.ingestion_failure_count, 0),
         installation_count: websiteEntries.reduce((sum, entry) => sum + entry.installation_count, 0),
         active_installation_count: websiteEntries.reduce((sum, entry) => sum + entry.active_installation_count, 0),
         websites: websiteEntries
       };
     });
+  }
+
+  healthThresholds() {
+    return this.websiteHealthService.thresholds();
   }
 
   requireWebsite(websiteId) {
@@ -175,6 +234,65 @@ function groupBy(rows, field) {
     grouped.set(key, bucket);
   });
   return grouped;
+}
+
+function groupRows(rows, field) {
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const key = String(row[field]);
+    const bucket = grouped.get(key) ?? [];
+    bucket.push(row);
+    grouped.set(key, bucket);
+  });
+  return grouped;
+}
+
+function buildWebsiteObservabilityMap(rows) {
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const entry = grouped.get(String(row.website_id)) ?? emptyObservabilitySummary();
+    entry[row.event_type] = {
+      total_count: row.total_count,
+      recent_count: row.recent_count,
+      last_occurred_at: row.last_occurred_at
+    };
+    grouped.set(String(row.website_id), entry);
+  });
+  return grouped;
+}
+
+function buildInstallationObservabilityMap(rows) {
+  const grouped = new Map();
+  rows.forEach((row) => {
+    if (!row.installation_id) {
+      return;
+    }
+
+    const key = `${row.website_id}:${row.installation_id}`;
+    const entry = grouped.get(key) ?? emptyObservabilitySummary();
+    entry[row.event_type] = {
+      total_count: row.total_count,
+      recent_count: row.recent_count,
+      last_occurred_at: row.last_occurred_at
+    };
+    grouped.set(key, entry);
+  });
+  return grouped;
+}
+
+function emptyObservabilitySummary() {
+  return {
+    auth_failure: {
+      total_count: 0,
+      recent_count: 0,
+      last_occurred_at: null
+    },
+    ingestion_failure: {
+      total_count: 0,
+      recent_count: 0,
+      last_occurred_at: null
+    }
+  };
 }
 
 function resolveClientRecord(clients, website) {

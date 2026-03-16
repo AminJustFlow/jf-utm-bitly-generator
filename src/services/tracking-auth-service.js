@@ -4,11 +4,13 @@ import { maskValue } from "../support/webhook-debug.js";
 export class TrackingAuthService {
   constructor({
     websiteRepository,
+    websiteObservabilityEventRepository = null,
     encryptionKey = "",
     maxAgeSeconds = 300,
     logger = null
   } = {}) {
     this.websiteRepository = websiteRepository;
+    this.websiteObservabilityEventRepository = websiteObservabilityEventRepository;
     this.encryptionKey = deriveEncryptionKey(encryptionKey);
     this.maxAgeSeconds = Number(maxAgeSeconds ?? 300);
     this.logger = logger;
@@ -44,22 +46,37 @@ export class TrackingAuthService {
     const publicKey = normalizeString(request.header("x-jf-public-key"));
     const timestamp = normalizeString(request.header("x-jf-timestamp"));
     const signature = normalizeSignature(request.header("x-jf-signature"));
+    const website = publicKey
+      ? this.websiteRepository.findByPublicKey(publicKey)
+      : null;
 
     if (!publicKey) {
       return this.authError(401, "missing_public_key", "Missing X-JF-Public-Key header.");
     }
 
     if (!timestamp) {
-      return this.authError(401, "missing_timestamp", "Missing X-JF-Timestamp header.");
+      return this.authError(401, "missing_timestamp", "Missing X-JF-Timestamp header.", {
+        request,
+        website,
+        publicKey
+      });
     }
 
     if (!signature) {
-      return this.authError(401, "missing_signature", "Missing X-JF-Signature header.");
+      return this.authError(401, "missing_signature", "Missing X-JF-Signature header.", {
+        request,
+        website,
+        publicKey
+      });
     }
 
     const timestampMs = Date.parse(timestamp);
     if (Number.isNaN(timestampMs)) {
-      return this.authError(401, "invalid_timestamp", "X-JF-Timestamp must be a valid ISO timestamp.");
+      return this.authError(401, "invalid_timestamp", "X-JF-Timestamp must be a valid ISO timestamp.", {
+        request,
+        website,
+        publicKey
+      });
     }
 
     const ageMs = Math.abs(now.getTime() - timestampMs);
@@ -67,21 +84,33 @@ export class TrackingAuthService {
       return this.authError(
         401,
         "stale_timestamp",
-        `X-JF-Timestamp is outside the allowed ${this.maxAgeSeconds}-second window.`
+        `X-JF-Timestamp is outside the allowed ${this.maxAgeSeconds}-second window.`,
+        {
+          request,
+          website,
+          publicKey
+        }
       );
     }
 
-    const website = this.websiteRepository.findByPublicKey(publicKey);
     if (!website) {
       return this.authError(403, "website_not_found", "Unknown website credentials.");
     }
 
     if (String(website.status ?? "").trim().toLowerCase() !== "active") {
-      return this.authError(403, "website_inactive", "Website credentials are not active.");
+      return this.authError(403, "website_inactive", "Website credentials are not active.", {
+        request,
+        website,
+        publicKey
+      });
     }
 
     if (!this.encryptionKey) {
-      return this.authError(500, "auth_unavailable", "Tracking request verification is not configured.");
+      return this.authError(500, "auth_unavailable", "Tracking request verification is not configured.", {
+        request,
+        website,
+        publicKey
+      });
     }
 
     let secretPlain = "";
@@ -94,12 +123,20 @@ export class TrackingAuthService {
         error: error.message
       });
 
-      return this.authError(500, "auth_unavailable", "Tracking request verification is not available.");
+      return this.authError(500, "auth_unavailable", "Tracking request verification is not available.", {
+        request,
+        website,
+        publicKey
+      });
     }
 
     const expectedSignature = this.sign(secretPlain, timestamp, request.rawBody ?? "");
     if (!timingSafeStringEqual(signature, expectedSignature)) {
-      return this.authError(403, "invalid_signature", "Invalid tracking request signature.");
+      return this.authError(403, "invalid_signature", "Invalid tracking request signature.", {
+        request,
+        website,
+        publicKey
+      });
     }
 
     return {
@@ -110,7 +147,8 @@ export class TrackingAuthService {
     };
   }
 
-  authError(statusCode, code, message) {
+  authError(statusCode, code, message, context = {}) {
+    this.recordAuthFailure(code, message, context);
     return {
       ok: false,
       statusCode,
@@ -119,6 +157,28 @@ export class TrackingAuthService {
         message
       }
     };
+  }
+
+  recordAuthFailure(code, message, context = {}) {
+    if (!this.websiteObservabilityEventRepository || !context.website?.id) {
+      return;
+    }
+
+    this.websiteObservabilityEventRepository.create({
+      websiteId: Number(context.website.id),
+      installationId: extractInstallationId(context.request),
+      pluginVersion: extractPluginVersion(context.request),
+      eventType: "auth_failure",
+      errorCode: code,
+      message,
+      detailsJson: {
+        path: context.request?.path ?? "",
+        method: context.request?.method ?? "",
+        public_key: context.publicKey ? maskValue(context.publicKey) : null,
+        timestamp: context.request?.header?.("x-jf-timestamp") ?? null
+      },
+      occurredAt: new Date().toISOString()
+    });
   }
 }
 
@@ -193,4 +253,38 @@ function normalizeString(value) {
 
 function randomToken(bytes) {
   return crypto.randomBytes(bytes).toString("base64url");
+}
+
+function extractInstallationId(request) {
+  const queryInstallationId = normalizeString(request?.query?.installation_id);
+  if (queryInstallationId) {
+    return queryInstallationId;
+  }
+
+  const payload = parseRequestBodyObject(request?.rawBody);
+  return normalizeString(payload?.installation_id);
+}
+
+function extractPluginVersion(request) {
+  const queryVersion = normalizeString(request?.query?.plugin_version);
+  if (queryVersion) {
+    return queryVersion;
+  }
+
+  const payload = parseRequestBodyObject(request?.rawBody);
+  return normalizeString(payload?.plugin_version);
+}
+
+function parseRequestBodyObject(rawBody) {
+  const normalized = String(rawBody ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(normalized);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }

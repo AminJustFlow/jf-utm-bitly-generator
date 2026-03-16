@@ -27,10 +27,13 @@ import { VisitorRepository } from "../repositories/visitor-repository.js";
 import { SessionRepository } from "../repositories/session-repository.js";
 import { TrackingEventRepository } from "../repositories/tracking-event-repository.js";
 import { ConversionRepository } from "../repositories/conversion-repository.js";
+import { StitchedProfileRepository } from "../repositories/stitched-profile-repository.js";
+import { WebsiteObservabilityEventRepository } from "../repositories/website-observability-event-repository.js";
 import { WebsiteInstallationRepository } from "../repositories/website-installation-repository.js";
 import { WebsiteInstallationEventRepository } from "../repositories/website-installation-event-repository.js";
 import { WebsiteCredentialEventRepository } from "../repositories/website-credential-event-repository.js";
 import { ConversionAttributionRepository } from "../repositories/conversion-attribution-repository.js";
+import { AnalyticsRefreshJobRepository } from "../repositories/analytics-refresh-job-repository.js";
 import { AnalyticsRollupRepository } from "../repositories/analytics-rollup-repository.js";
 import { RulesService } from "../services/rules-service.js";
 import { UrlService } from "../services/url-service.js";
@@ -62,6 +65,9 @@ import { WebsiteProvisioningService } from "../services/website-provisioning-ser
 import { PluginTelemetryService } from "../services/plugin-telemetry-service.js";
 import { WebsiteAdministrationService } from "../services/website-administration-service.js";
 import { AnalyticsReportingService } from "../services/analytics-reporting-service.js";
+import { AnalyticsRefreshService } from "../services/analytics-refresh-service.js";
+import { IdentityStitchingService } from "../services/identity-stitching-service.js";
+import { WebsiteHealthService } from "../services/website-health-service.js";
 
 export async function createApplication(projectRoot) {
   loadEnvFile(path.join(projectRoot, ".env"));
@@ -86,10 +92,13 @@ export async function createApplication(projectRoot) {
   const sessionRepository = new SessionRepository(database);
   const trackingEventRepository = new TrackingEventRepository(database);
   const conversionRepository = new ConversionRepository(database);
+  const stitchedProfileRepository = new StitchedProfileRepository(database);
+  const websiteObservabilityEventRepository = new WebsiteObservabilityEventRepository(database);
   const websiteInstallationRepository = new WebsiteInstallationRepository(database);
   const websiteInstallationEventRepository = new WebsiteInstallationEventRepository(database);
   const websiteCredentialEventRepository = new WebsiteCredentialEventRepository(database);
   const conversionAttributionRepository = new ConversionAttributionRepository(database);
+  const analyticsRefreshJobRepository = new AnalyticsRefreshJobRepository(database);
   const analyticsRollupRepository = new AnalyticsRollupRepository(database);
   const utmLibraryService = new UtmLibraryService(requestRepository);
   const rulesService = new RulesService(rules);
@@ -110,6 +119,7 @@ export async function createApplication(projectRoot) {
   const libraryAuthService = new BasicAuthService(config.libraryAuth);
   const trackingAuthService = new TrackingAuthService({
     websiteRepository,
+    websiteObservabilityEventRepository,
     encryptionKey: config.tracking.secretEncryptionKey,
     maxAgeSeconds: config.tracking.signatureMaxAgeSeconds,
     logger
@@ -159,19 +169,43 @@ export async function createApplication(projectRoot) {
     websiteInstallationRepository,
     websiteInstallationEventRepository
   });
+  const websiteHealthService = new WebsiteHealthService({
+    staleHours: config.app.websiteHealthStaleHours,
+    heartbeatGapHours: config.app.websiteHealthHeartbeatGapHours,
+    trafficGapHours: config.app.websiteHealthTrafficGapHours,
+    failureWindowHours: config.app.websiteHealthFailureWindowHours
+  });
+  const identityStitchingService = new IdentityStitchingService({
+    visitorRepository,
+    stitchedProfileRepository
+  });
   const analyticsReportingService = new AnalyticsReportingService({
     database,
+    clientRepository,
     websiteRepository,
     conversionAttributionRepository,
     analyticsRollupRepository
+  });
+  const analyticsRefreshService = new AnalyticsRefreshService({
+    websiteRepository,
+    analyticsReportingService,
+    analyticsRefreshJobRepository,
+    logger,
+    enabled: config.app.analyticsRefreshEnabled,
+    intervalMs: config.app.analyticsRefreshPollMs,
+    batchSize: config.app.analyticsRefreshBatchSize,
+    retryDelayMs: config.app.analyticsRefreshRetryDelayMs
   });
   const websiteAdministrationService = new WebsiteAdministrationService({
     clientRepository,
     websiteRepository,
     websiteProvisioningService,
+    conversionRepository,
     websiteInstallationRepository,
     websiteInstallationEventRepository,
     websiteCredentialEventRepository,
+    websiteObservabilityEventRepository,
+    websiteHealthService,
     trackingAuthService
   });
   const trackingIngestionService = new TrackingIngestionService({
@@ -182,6 +216,8 @@ export async function createApplication(projectRoot) {
     trackingEventRepository,
     conversionRepository,
     pluginTelemetryService,
+    analyticsRefreshService,
+    identityStitchingService,
     analyticsReportingService,
     logger
   });
@@ -229,14 +265,16 @@ export async function createApplication(projectRoot) {
     trackingIngestionService,
     pluginConfigService,
     websiteRepository,
-    pluginTelemetryService
+    pluginTelemetryService,
+    websiteObservabilityEventRepository
   });
   const websiteAdminController = new WebsiteAdminController({
     websiteAdministrationService,
     rulesService
   });
   const reportingController = new ReportingController({
-    analyticsReportingService
+    analyticsReportingService,
+    analyticsRefreshService
   });
 
   const router = new Router();
@@ -250,6 +288,8 @@ export async function createApplication(projectRoot) {
   router.add("POST", "/admin/websites/status", protectLibraryRoute(libraryAuthService, (request) => websiteAdminController.handleStatus(request)));
   router.add("GET", "/admin/reports", protectLibraryRoute(libraryAuthService, (request) => reportingController.handleHtml(request)));
   router.add("GET", "/admin/reports.json", protectLibraryRoute(libraryAuthService, (request) => reportingController.handleJson(request)));
+  router.add("GET", "/admin/reports/traffic.json", protectLibraryRoute(libraryAuthService, (request) => reportingController.handleTrafficJson(request)));
+  router.add("GET", "/admin/reports/funnel.json", protectLibraryRoute(libraryAuthService, (request) => reportingController.handleFunnelJson(request)));
   router.add("GET", "/new", protectLibraryRoute(libraryAuthService, (request) => utmBuilderController.handleHtml(request)));
   router.add("POST", "/new", protectLibraryRoute(libraryAuthService, (request) => utmBuilderController.handleCreate(request)));
   router.add("GET", "/imports", protectLibraryRoute(libraryAuthService, (request) => utmImportController.handleHtml(request)));
@@ -268,11 +308,65 @@ export async function createApplication(projectRoot) {
   return new Application(router, migrationRunner, config, {
     start: async () => {
       receivedRequestRecoveryService.start();
+      if (config.app.analyticsRefreshMode === "in_process") {
+        analyticsRefreshService.start();
+      }
     },
     stop: async () => {
       receivedRequestRecoveryService.stop();
+      analyticsRefreshService.stop();
     }
   });
+}
+
+export async function createAnalyticsWorker(projectRoot) {
+  loadEnvFile(path.join(projectRoot, ".env"));
+  const config = resolveConfig(projectRoot);
+  process.env.TZ = config.app.timezone;
+
+  fs.mkdirSync(path.dirname(config.database.path), { recursive: true });
+  fs.mkdirSync(path.dirname(config.logging.path), { recursive: true });
+
+  const logger = new Logger(config.logging.path, config.app.debug);
+  const database = connectDatabase(config.database.path);
+  const migrationRunner = new MigrationRunner(database, path.join(projectRoot, "database", "migrations"));
+  await migrationRunner.migrate();
+
+  const clientRepository = new ClientRepository(database);
+  const websiteRepository = new WebsiteRepository(database);
+  const conversionAttributionRepository = new ConversionAttributionRepository(database);
+  const analyticsRefreshJobRepository = new AnalyticsRefreshJobRepository(database);
+  const analyticsRollupRepository = new AnalyticsRollupRepository(database);
+  const analyticsReportingService = new AnalyticsReportingService({
+    database,
+    clientRepository,
+    websiteRepository,
+    conversionAttributionRepository,
+    analyticsRollupRepository
+  });
+  const active = config.app.analyticsRefreshEnabled
+    && config.app.analyticsRefreshMode === "external";
+  const analyticsRefreshService = new AnalyticsRefreshService({
+    websiteRepository,
+    analyticsReportingService,
+    analyticsRefreshJobRepository,
+    logger,
+    enabled: active,
+    intervalMs: config.app.analyticsRefreshPollMs,
+    batchSize: config.app.analyticsRefreshBatchSize,
+    retryDelayMs: config.app.analyticsRefreshRetryDelayMs
+  });
+
+  return {
+    config,
+    active,
+    async start() {
+      analyticsRefreshService.start();
+    },
+    async stop() {
+      analyticsRefreshService.stop();
+    }
+  };
 }
 
 function resolveConfig(projectRoot) {
@@ -290,7 +384,16 @@ function resolveConfig(projectRoot) {
       recoveryEnabled: parseBoolean(process.env.REQUEST_RECOVERY_ENABLED, baseConfig.app.recoveryEnabled),
       recoveryPollMs: Number(process.env.REQUEST_RECOVERY_POLL_MS ?? baseConfig.app.recoveryPollMs),
       recoveryGraceSeconds: Number(process.env.REQUEST_RECOVERY_GRACE_SECONDS ?? baseConfig.app.recoveryGraceSeconds),
-      recoveryBatchSize: Number(process.env.REQUEST_RECOVERY_BATCH_SIZE ?? baseConfig.app.recoveryBatchSize)
+      recoveryBatchSize: Number(process.env.REQUEST_RECOVERY_BATCH_SIZE ?? baseConfig.app.recoveryBatchSize),
+      analyticsRefreshEnabled: parseBoolean(process.env.ANALYTICS_REFRESH_ENABLED, baseConfig.app.analyticsRefreshEnabled),
+      analyticsRefreshMode: normalizeAnalyticsRefreshMode(process.env.ANALYTICS_REFRESH_MODE, baseConfig.app.analyticsRefreshMode),
+      analyticsRefreshPollMs: Number(process.env.ANALYTICS_REFRESH_POLL_MS ?? baseConfig.app.analyticsRefreshPollMs),
+      analyticsRefreshBatchSize: Number(process.env.ANALYTICS_REFRESH_BATCH_SIZE ?? baseConfig.app.analyticsRefreshBatchSize),
+      analyticsRefreshRetryDelayMs: Number(process.env.ANALYTICS_REFRESH_RETRY_DELAY_MS ?? baseConfig.app.analyticsRefreshRetryDelayMs),
+      websiteHealthStaleHours: Number(process.env.WEBSITE_HEALTH_STALE_HOURS ?? baseConfig.app.websiteHealthStaleHours),
+      websiteHealthHeartbeatGapHours: Number(process.env.WEBSITE_HEALTH_HEARTBEAT_GAP_HOURS ?? baseConfig.app.websiteHealthHeartbeatGapHours),
+      websiteHealthTrafficGapHours: Number(process.env.WEBSITE_HEALTH_TRAFFIC_GAP_HOURS ?? baseConfig.app.websiteHealthTrafficGapHours),
+      websiteHealthFailureWindowHours: Number(process.env.WEBSITE_HEALTH_FAILURE_WINDOW_HOURS ?? baseConfig.app.websiteHealthFailureWindowHours)
     },
     database: {
       path: absolutePath(process.env.DATABASE_PATH ?? baseConfig.database.path, projectRoot)
@@ -368,6 +471,13 @@ function parseBoolean(value, fallback) {
   }
 
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function normalizeAnalyticsRefreshMode(value, fallback) {
+  const normalized = String(value ?? fallback ?? "").trim().toLowerCase();
+  return ["in_process", "external", "disabled"].includes(normalized)
+    ? normalized
+    : "in_process";
 }
 
 function protectLibraryRoute(authService, handler) {
