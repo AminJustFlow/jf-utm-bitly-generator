@@ -1,7 +1,7 @@
 const NAV_ITEMS = [
-  { key: "library", href: "/utms", label: "UTM Library" },
-  { key: "builder", href: "/new", label: "Create UTM" },
-  { key: "imports", href: "/imports", label: "Import Trackers" }
+  { key: "library", href: "/utms", label: "Saved Links" },
+  { key: "builder", href: "/new", label: "Create Link" },
+  { key: "imports", href: "/imports", label: "Import History" }
 ];
 
 export function renderAppShellStyles() {
@@ -20,7 +20,7 @@ export function renderAppShellStyles() {
 export function renderAppHeader(activeKey) {
   return `<header class="app-header">
     <div class="app-brand">
-      <a href="/utms">JF UTM Console</a>
+      <a href="/utms">JF Link Manager</a>
       <span>Create, import, and manage tracked links from one place.</span>
     </div>
     <nav class="app-nav" aria-label="Primary">

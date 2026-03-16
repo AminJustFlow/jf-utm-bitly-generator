@@ -34,7 +34,7 @@ export class UtmImportController {
         status: "error",
         error: {
           code: "missing_files",
-          message: "Select one or more XLSX files to import."
+          message: "Select one or more Excel files to import."
         }
       }, 422);
     }
@@ -68,7 +68,7 @@ function renderHtml(view) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Import UTM Trackers</title>
+  <title>Import History</title>
   <style>
     :root{--bg:#f4efe5;--panel:rgba(255,250,242,.95);--ink:#17302a;--muted:#66766f;--accent:#0d6c5e;--line:rgba(23,48,42,.1);--shadow:0 24px 60px rgba(20,32,31,.09);--danger:#b4432b;--danger-bg:rgba(180,67,43,.12)}
     *{box-sizing:border-box}body{margin:0;color:var(--ink);font-family:"Aptos","Segoe UI",sans-serif;background:radial-gradient(circle at top left,rgba(13,108,94,.18),transparent 32rem),radial-gradient(circle at top right,rgba(183,142,65,.12),transparent 26rem),linear-gradient(180deg,#faf7f1 0%,var(--bg) 100%)}
@@ -96,41 +96,41 @@ function renderHtml(view) {
     <section class="panel">
       <div class="top">
         <div>
-          <h1>Import UTM Trackers</h1>
-          <p class="lede">Upload one or more historical XLSX tracker files. The importer reads the client tabs, skips helper sheets like VALUES and CAMPAIGNS, and adds imported links to the app library.</p>
+          <h1>Import History</h1>
+          <p class="lede">Upload one or more historical Excel tracker files. The importer reads the client tabs, skips helper sheets like VALUES and CAMPAIGNS, and adds those links to the app.</p>
         </div>
       </div>
     </section>
 
     <section class="panel">
-      <h2>Select Files</h2>
-      <p class="meta" style="margin-top:.35rem;margin-bottom:.85rem">Accepted format: .xlsx. Importing the same exact historical row twice is skipped automatically.</p>
+      <h2>Choose Excel Files</h2>
+      <p class="meta" style="margin-top:.35rem;margin-bottom:.85rem">Accepted format: .xlsx. If the same historical row was already imported, it is skipped automatically.</p>
       <form id="import-form">
         <input type="file" id="file-input" accept=".xlsx" multiple>
         <div class="actions" style="margin-top:1rem">
-          <button class="button" type="submit" data-submit>Import Selected Files</button>
+          <button class="button" type="submit" data-submit>Import Files</button>
           <div class="status" id="form-status" aria-live="polite"></div>
         </div>
       </form>
     </section>
 
     <section class="panel danger-card">
-      <h2>Reset Imported History</h2>
-      <p class="meta" style="margin-top:.35rem;margin-bottom:.85rem">Use this only when you want to remove imported Excel history and import a cleaned workbook again. This deletes imported request rows and removes import-seeded short-link cache entries that are no longer referenced.</p>
+      <h2>Delete Imported History</h2>
+      <p class="meta" style="margin-top:.35rem;margin-bottom:.85rem">Use this only when you want to remove links that came from imported Excel files and then import a cleaned workbook again. This deletes imported history rows and imported saved-link records that are no longer used anywhere else.</p>
       <div class="stats" style="margin-top:.85rem">
-        <div class="stat"><strong id="inventory-imported-requests">${inventory.importedRequests}</strong><span>Imported request rows</span></div>
-        <div class="stat"><strong id="inventory-imported-links">${inventory.importedGeneratedLinks}</strong><span>Import-seeded link cache rows</span></div>
+        <div class="stat"><strong id="inventory-imported-requests">${inventory.importedRequests}</strong><span>Imported history rows</span></div>
+        <div class="stat"><strong id="inventory-imported-links">${inventory.importedGeneratedLinks}</strong><span>Imported saved-link records</span></div>
       </div>
       <div class="actions" style="margin-top:1rem">
-        <button class="danger-button" type="button" id="reset-imports-button">Reset Imported UTMs</button>
+        <button class="danger-button" type="button" id="reset-imports-button">Delete Imported Links</button>
         <div class="status" id="reset-status" aria-live="polite"></div>
       </div>
     </section>
 
     <section class="panel hidden" id="result-panel">
-      <h2>Import Summary</h2>
+      <h2>Import Results</h2>
       <div class="stats" style="margin-top:.85rem">
-        <div class="stat"><strong id="summary-attempted">0</strong><span>Rows scanned</span></div>
+        <div class="stat"><strong id="summary-attempted">0</strong><span>Rows checked</span></div>
         <div class="stat"><strong id="summary-imported">0</strong><span>Imported</span></div>
         <div class="stat"><strong id="summary-skipped">0</strong><span>Skipped</span></div>
         <div class="stat"><strong id="summary-errors">0</strong><span>Errors</span></div>
@@ -226,7 +226,7 @@ function renderHtml(view) {
           });
           const body = await response.json();
           if (!response.ok || body.status !== "ok") {
-            const message = body && body.error && body.error.message ? body.error.message : "Unable to import those workbook files.";
+            const message = body && body.error && body.error.message ? body.error.message : "Unable to import those Excel files.";
             showStatus(message, "error");
             return;
           }
@@ -234,19 +234,19 @@ function renderHtml(view) {
           renderResults(body.result);
           showStatus("Import finished.", "success");
         } catch (error) {
-          showStatus(error && error.message ? error.message : "Unable to import those workbook files.", "error");
+          showStatus(error && error.message ? error.message : "Unable to import those Excel files.", "error");
         } finally {
           submitButton.disabled = false;
         }
       });
 
       resetButton.addEventListener("click", async () => {
-        if (!window.confirm("Remove imported Excel history and reset the imported cache?")) {
+        if (!window.confirm("Delete all links that were added from imported Excel files?")) {
           return;
         }
 
         resetButton.disabled = true;
-        showResetStatus("Resetting imported history...", "");
+        showResetStatus("Deleting imported history...", "");
 
         try {
           const response = await fetch("/imports/reset", {
@@ -256,18 +256,18 @@ function renderHtml(view) {
           });
           const body = await response.json();
           if (!response.ok || body.status !== "ok") {
-            const message = body && body.error && body.error.message ? body.error.message : "Unable to reset imported UTM history.";
+            const message = body && body.error && body.error.message ? body.error.message : "Unable to delete the imported history.";
             showResetStatus(message, "error");
             return;
           }
 
           applyInventory(body.result.inventory || {});
           showResetStatus(
-            "Removed " + body.result.deletedRequests + " imported request row(s) and " + body.result.deletedGeneratedLinks + " import-seeded link row(s).",
+            "Deleted " + body.result.deletedRequests + " imported history row(s) and " + body.result.deletedGeneratedLinks + " imported saved-link record(s).",
             "success"
           );
         } catch (error) {
-          showResetStatus(error && error.message ? error.message : "Unable to reset imported UTM history.", "error");
+          showResetStatus(error && error.message ? error.message : "Unable to delete the imported history.", "error");
         } finally {
           resetButton.disabled = false;
         }

@@ -645,7 +645,7 @@ const tests = [
         enabled: true,
         username: "justflow",
         password: "preview",
-        realm: "JF UTM Library"
+        realm: "JF Link Manager"
       });
 
       const challenge = auth.protect({
@@ -656,7 +656,7 @@ const tests = [
 
       assert.ok(challenge);
       assert.equal(challenge.statusCode, 401);
-      assert.match(challenge.headers["WWW-Authenticate"], /Basic realm="JF UTM Library"/iu);
+      assert.match(challenge.headers["WWW-Authenticate"], /Basic realm="JF Link Manager"/iu);
 
       const allowed = auth.protect({
         header(name) {
@@ -1590,13 +1590,13 @@ const tests = [
 
       assert.equal(htmlResponse.statusCode, 200);
       assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
-      assert.match(htmlResponse.body, /Import UTM Trackers/iu);
-      assert.match(htmlResponse.body, /JF UTM Console/iu);
-      assert.match(htmlResponse.body, /Import Selected Files/iu);
-      assert.match(htmlResponse.body, /UTM Library/iu);
-      assert.match(htmlResponse.body, /Create UTM/iu);
-      assert.match(htmlResponse.body, /aria-current="page">Import Trackers/iu);
-      assert.match(htmlResponse.body, /Reset Imported UTMs/iu);
+      assert.match(htmlResponse.body, /Import History/iu);
+      assert.match(htmlResponse.body, /JF Link Manager/iu);
+      assert.match(htmlResponse.body, /Import Files/iu);
+      assert.match(htmlResponse.body, /Saved Links/iu);
+      assert.match(htmlResponse.body, /Create Link/iu);
+      assert.match(htmlResponse.body, /aria-current="page">Import History/iu);
+      assert.match(htmlResponse.body, /Delete Imported Links/iu);
       assert.match(htmlResponse.body, />7</u);
 
       assert.equal(errorResponse.statusCode, 422);
@@ -1747,17 +1747,17 @@ const tests = [
 
       assert.equal(htmlResponse.statusCode, 200);
       assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
-      assert.match(htmlResponse.body, /UTM Library/iu);
-      assert.match(htmlResponse.body, /JF UTM Console/iu);
+      assert.match(htmlResponse.body, /Saved Links/iu);
+      assert.match(htmlResponse.body, /JF Link Manager/iu);
       assert.match(htmlResponse.body, /spring_sale/iu);
-      assert.match(htmlResponse.body, /QR Preview/iu);
+      assert.match(htmlResponse.body, /QR Code And Details/iu);
       assert.match(htmlResponse.body, /create-qr-code/iu);
-      assert.match(htmlResponse.body, /Edit and regenerate/iu);
-      assert.match(htmlResponse.body, /Short Link/iu);
-      assert.match(htmlResponse.body, /aria-current="page">UTM Library/iu);
-      assert.match(htmlResponse.body, /Import Trackers/iu);
+      assert.match(htmlResponse.body, /Edit this link/iu);
+      assert.match(htmlResponse.body, /Short link/iu);
+      assert.match(htmlResponse.body, /aria-current="page">Saved Links/iu);
+      assert.match(htmlResponse.body, /Import History/iu);
       assert.match(htmlResponse.body, /data-regenerate-form/iu);
-      assert.match(htmlResponse.body, /Delete Entry/iu);
+      assert.match(htmlResponse.body, /Delete Link/iu);
       assert.match(htmlResponse.body, /\/utms\/delete/iu);
       assert.equal(csvResponse.statusCode, 200);
       assert.match(csvResponse.headers["Content-Type"], /text\/csv/iu);
@@ -1767,7 +1767,7 @@ const tests = [
       assert.match(regenerateResponse.body, /highlight_request_id=22/iu);
       assert.equal(deleteResponse.statusCode, 200);
       assert.match(deleteResponse.body, /"deleted_requests":3/iu);
-      assert.match(deleteResponse.body, /toast=UTM\+entry\+removed/iu);
+      assert.match(deleteResponse.body, /toast=Saved\+link\+deleted/iu);
     }
   },
   {
@@ -1848,16 +1848,16 @@ const tests = [
 
       assert.equal(htmlResponse.statusCode, 200);
       assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
-      assert.match(htmlResponse.body, /Create UTM/iu);
-      assert.match(htmlResponse.body, /JF UTM Console/iu);
-      assert.match(htmlResponse.body, /UTM Library/iu);
-      assert.match(htmlResponse.body, /aria-current="page">Create UTM/iu);
-      assert.match(htmlResponse.body, /Import Trackers/iu);
+      assert.match(htmlResponse.body, /Create Link/iu);
+      assert.match(htmlResponse.body, /JF Link Manager/iu);
+      assert.match(htmlResponse.body, /Saved Links/iu);
+      assert.match(htmlResponse.body, /aria-current="page">Create Link/iu);
+      assert.match(htmlResponse.body, /Import History/iu);
       assert.match(htmlResponse.body, /campaign_label/iu);
-      assert.match(htmlResponse.body, /Matching setups/iu);
+      assert.match(htmlResponse.body, /Matching options/iu);
       assert.match(htmlResponse.body, /data-combo-field="source"/iu);
       assert.match(htmlResponse.body, /utm_source_custom/iu);
-      assert.match(htmlResponse.body, /Custom overrides/iu);
+      assert.match(htmlResponse.body, /Use custom UTM values/iu);
       assert.equal(createResponse.statusCode, 200);
       const payload = JSON.parse(createResponse.body);
       assert.equal(payload.status, "ok");

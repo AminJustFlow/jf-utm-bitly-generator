@@ -60,6 +60,6 @@ export default {
     enabled: true,
     username: "justflow",
     password: "preview",
-    realm: "JF UTM Library"
+    realm: "JF Link Manager"
   }
 };

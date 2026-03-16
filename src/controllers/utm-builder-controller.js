@@ -61,7 +61,7 @@ export class UtmBuilderController {
           ? "Tracked link saved. Bitly quota blocked the short link, so the full UTM link is available."
           : result.result.reusedExisting
             ? "Tracked link saved. A matching short link already existed, so it was reused."
-            : "Tracked link saved with a fresh generation.",
+          : "Tracked link saved.",
         toast_level: shortLinkUnavailable ? "warning" : "success"
       })}`,
       result: serializeResult(result)
@@ -83,7 +83,7 @@ function renderHtml(view) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Create UTM</title>
+  <title>Create Link</title>
   <style>
     :root{--bg:#f4efe5;--panel:rgba(255,250,242,.95);--ink:#17302a;--muted:#66766f;--accent:#0d6c5e;--line:rgba(23,48,42,.1);--shadow:0 24px 60px rgba(20,32,31,.09);--warning:#9a6708;--warning-bg:rgba(154,103,8,.12);--danger:#b4432b}
     *{box-sizing:border-box}body{margin:0;color:var(--ink);font-family:"Aptos","Segoe UI",sans-serif;background:radial-gradient(circle at top left,rgba(13,108,94,.18),transparent 32rem),radial-gradient(circle at top right,rgba(183,142,65,.12),transparent 26rem),linear-gradient(180deg,#faf7f1 0%,var(--bg) 100%)}
@@ -112,8 +112,8 @@ function renderHtml(view) {
     <section class="hero">
       <div class="hero-top">
         <div>
-          <h1>Create UTM</h1>
-          <p class="lede">Build the same tracked links the team creates in ClickUp, but with a structured frontend. This page uses the same normalization and generation pipeline as the bot, so the final UTM, short link, and QR output stay aligned.</p>
+          <h1>Create Link</h1>
+          <p class="lede">Create the same tracked links the team creates in ClickUp, but with a guided form. This page uses the same rules as the bot, so the tracked link, short link, and QR code stay consistent.</p>
         </div>
       </div>
     </section>
@@ -122,14 +122,14 @@ function renderHtml(view) {
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>Builder</h2>
-            <div class="meta">Choose a client first. The UTM dropdowns now filter each other from exact imported client combinations instead of acting like loose suggestions.</div>
+            <h2>Create a Tracked Link</h2>
+            <div class="meta">Choose a client first. The dropdowns only show approved combinations for that client so it is easier to pick the right values.</div>
           </div>
         </div>
         <form id="builder-form">
           <div class="banner">
-            <strong>Exact setup mode</strong>
-            <span>Start with the basic fields below. Open the advanced sections only when you need to force a specific UTM setup or override taxonomy values.</span>
+            <strong>Simple mode</strong>
+            <span>Start with the basic fields below. Open the advanced sections only if you need to choose exact UTM values or type custom ones.</span>
           </div>
           <div style="height:.8rem"></div>
           <div class="form-grid">
@@ -147,79 +147,79 @@ function renderHtml(view) {
             <label style="grid-column:1/-1">Destination URL
               <input type="url" name="destination_url" id="destination_url" required placeholder="https://example.com/page">
             </label>
-            <label>Campaign label
+            <label>Campaign name
               <input type="text" name="campaign_label" id="campaign_label" placeholder="spring sale or contact">
-              <span class="meta">Optional shorthand for ClickUp-style requests. If the exact dropdowns stay on Auto, the backend can still map this text into the right setup.</span>
+              <span class="meta">Optional plain-language name. If the advanced dropdowns stay on Auto, the app can still map this name to the right setup.</span>
             </label>
             <label class="banner" style="display:flex;gap:.65rem;align-items:flex-start">
               <input type="checkbox" name="needs_qr" id="needs_qr" style="width:auto;margin-top:.2rem;accent-color:var(--accent)">
-              <span>Generate a QR code for this version.</span>
+              <span>Create a QR code for this link.</span>
             </label>
           </div>
 
           <div class="summary-strip">
             <div class="summary-card">
-              <strong>Matching setups</strong>
-              <span id="matching-summary">Select a client to load exact source, medium, campaign, term, and content combinations.</span>
+              <strong>Matching options</strong>
+              <span id="matching-summary">Select a client to load the approved source, medium, campaign, term, and content combinations.</span>
             </div>
             <div class="summary-card">
-              <strong>Current scope</strong>
-              <span id="scope-summary">Source, medium, campaign, term, and content will resolve automatically unless you open the advanced options below.</span>
+              <strong>How values will be filled</strong>
+              <span id="scope-summary">Source, medium, campaign, term, and content will be filled automatically unless you open the advanced options below.</span>
             </div>
           </div>
 
           <details class="flow-details">
-            <summary>Exact UTM setup</summary>
-            <div class="meta" style="margin-bottom:.8rem">Use these dropdowns when you want to force one of the approved client combinations from the imported workbook data.</div>
+            <summary>Choose approved UTM values</summary>
+            <div class="meta" style="margin-bottom:.8rem">Use these dropdowns when you want to pick one of the approved client combinations from the imported spreadsheet data.</div>
             <div class="form-grid">
-              <label>UTM Source
+              <label>Source
                 <select name="utm_source" id="utm_source" data-combo-field="source"></select>
               </label>
-              <label>UTM Medium
+              <label>Medium
                 <select name="utm_medium" id="utm_medium" data-combo-field="medium"></select>
               </label>
-              <label>UTM Campaign
+              <label>Campaign
                 <select name="utm_campaign" id="utm_campaign" data-combo-field="campaign"></select>
               </label>
-              <label>UTM Term
+              <label>Term
                 <select name="utm_term" id="utm_term" data-combo-field="term"></select>
               </label>
-              <label style="grid-column:1/-1">UTM Content
+              <label style="grid-column:1/-1">Content
                 <select name="utm_content" id="utm_content" data-combo-field="content"></select>
               </label>
             </div>
           </details>
 
           <details class="flow-details">
-            <summary>Custom overrides</summary>
-            <div class="meta" style="margin-bottom:.8rem">Only use these when you intentionally want to override the approved dropdown values. Any custom value here wins on submit.</div>
+            <summary>Use custom UTM values</summary>
+            <div class="meta" style="margin-bottom:.8rem">Only use these fields when you want to override the approved dropdown values. Any custom value here will be used instead.</div>
             <div class="form-grid">
               <label>Custom Source
                 <input type="text" id="utm_source_custom" placeholder="Optional custom source override">
-                <span class="override-note">Overrides the exact setup source when filled.</span>
+                <span class="override-note">This replaces the selected source when filled in.</span>
               </label>
               <label>Custom Medium
                 <input type="text" id="utm_medium_custom" placeholder="Optional custom medium override">
-                <span class="override-note">Overrides the exact setup medium when filled.</span>
+                <span class="override-note">This replaces the selected medium when filled in.</span>
               </label>
               <label>Custom Campaign
                 <input type="text" id="utm_campaign_custom" placeholder="Optional custom campaign override">
-                <span class="override-note">Overrides the exact setup campaign when filled.</span>
+                <span class="override-note">This replaces the selected campaign when filled in.</span>
               </label>
               <label>Custom Term
                 <input type="text" id="utm_term_custom" placeholder="Optional custom term override">
-                <span class="override-note">Overrides the exact setup term when filled.</span>
+                <span class="override-note">This replaces the selected term when filled in.</span>
               </label>
               <label style="grid-column:1/-1">Custom Content
                 <input type="text" id="utm_content_custom" placeholder="Optional custom content override">
-                <span class="override-note">Overrides the exact setup content when filled.</span>
+                <span class="override-note">This replaces the selected content when filled in.</span>
               </label>
             </div>
           </details>
 
           <div class="actions" style="margin-top:1rem">
-            <button class="button" type="submit" data-submit>Generate Link</button>
-            <button class="link-button" type="reset">Reset</button>
+            <button class="button" type="submit" data-submit>Create Link</button>
+            <button class="link-button" type="reset">Clear Form</button>
             <div class="status" id="form-status" aria-live="polite"></div>
           </div>
         </form>
@@ -228,16 +228,16 @@ function renderHtml(view) {
       <aside class="panel">
         <div class="panel-head">
           <div>
-            <h2>Reference</h2>
-            <div class="meta">Use this only when you want to inspect the exact imported combinations more closely.</div>
+            <h2>Approved Values</h2>
+            <div class="meta">Use this section when you want to review the approved values and matching combinations for the selected client.</div>
           </div>
         </div>
         <details class="flow-details">
-          <summary>View matching setups and available values</summary>
+          <summary>View available values and matches</summary>
           <div class="stats">
-            <div class="stat"><strong id="source-count">0</strong><span>Sources</span></div>
-            <div class="stat"><strong id="combo-count">0</strong><span>Total setups</span></div>
-            <div class="stat"><strong id="matching-count">0</strong><span>Matching setups</span></div>
+            <div class="stat"><strong id="source-count">0</strong><span>Available sources</span></div>
+            <div class="stat"><strong id="combo-count">0</strong><span>Approved combinations</span></div>
+            <div class="stat"><strong id="matching-count">0</strong><span>Matching combinations</span></div>
           </div>
           <div style="height:.8rem"></div>
           <div class="card">
@@ -251,7 +251,7 @@ function renderHtml(view) {
           </div>
           <div style="height:.8rem"></div>
           <div class="card">
-            <strong>Preview</strong>
+            <strong>Matching Combinations</strong>
             <div class="combo-preview" id="matching-preview"><span class="empty">No client selected yet.</span></div>
           </div>
         </details>
@@ -262,14 +262,14 @@ function renderHtml(view) {
       <article class="result-card">
         <div class="result-meta">
           <div>
-            <h2 id="result-title">Generated link</h2>
+            <h2 id="result-title">New link</h2>
             <div class="meta" id="result-subtitle"></div>
           </div>
           <div class="chips" id="result-chips"></div>
         </div>
         <div class="result-grid">
           <section>
-            <h3 style="margin-bottom:.75rem">UTM Fields</h3>
+            <h3 style="margin-bottom:.75rem">UTM Values</h3>
             <div class="utm-grid" id="result-utm-grid"></div>
           </section>
           <section>
@@ -289,11 +289,11 @@ function renderHtml(view) {
       const EMPTY_SENTINEL = "__EMPTY__";
       const FIELD_ORDER = ${JSON.stringify(COMBINATION_FIELDS)};
       const FIELD_LABELS = {
-        source: "Auto - resolve from channel or setup",
-        medium: "Auto - resolve from channel or setup",
-        campaign: "Auto - resolve from matching setup",
-        term: "Auto - use matching setup",
-        content: "Auto - use matching setup"
+        source: "Auto - use the selected channel or matching option",
+        medium: "Auto - use the selected channel or matching option",
+        campaign: "Auto - use the best matching option",
+        term: "Auto - use the best matching option",
+        content: "Auto - use the best matching option"
       };
       const clients = JSON.parse(document.getElementById("client-catalog").textContent);
       const channels = JSON.parse(document.getElementById("channel-catalog").textContent);
@@ -489,20 +489,20 @@ function renderHtml(view) {
         document.getElementById("matching-count").textContent = String(matching.length);
         document.getElementById("matching-summary").textContent = matching.length > 0
           ? matching.length === 1
-            ? "One exact setup matches the current selections."
-            : String(matching.length) + " exact setups still match the current selections."
-          : "No exact client setups match the current selections right now.";
+            ? "One approved combination matches the current selections."
+            : String(matching.length) + " approved combinations still match the current selections."
+          : "No approved combinations match the current selections right now.";
         document.getElementById("scope-summary").textContent = customSelections.length > 0
-          ? "Custom overrides are active for " + customSelections.join(", ") + ". Those fields will win on submit."
+          ? "Custom values are active for " + customSelections.join(", ") + ". Those values will be used when you create the link."
           : exactSelections > 0
-            ? "An exact setup is partially selected. The remaining fields are still filtered to valid client combinations."
-            : "Source, medium, campaign, term, and content will resolve automatically unless you open the advanced options below.";
+            ? "An approved combination is partially selected. The remaining fields are still limited to valid client options."
+            : "Source, medium, campaign, term, and content will be filled automatically unless you open the advanced options below.";
         renderPills("source-pills", taxonomy.sources || [], "Select a client to load sources.");
         renderPills("campaign-pills", taxonomy.campaigns || [], "Select a client to load campaigns.");
         const preview = document.getElementById("matching-preview");
         preview.innerHTML = matching.length > 0
-          ? matching.slice(0, 4).map((combination, index) => '<div class="combo-row"><b>Setup ' + (index + 1) + '</b><span>' + escapeHtml(formatCombination(combination)) + '</span></div>').join("")
-          : '<span class="empty">No exact setups match the current selection. Clear one of the dropdowns or switch the channel defaults.</span>';
+          ? matching.slice(0, 4).map((combination, index) => '<div class="combo-row"><b>Match ' + (index + 1) + '</b><span>' + escapeHtml(formatCombination(combination)) + '</span></div>').join("")
+          : '<span class="empty">No approved combinations match the current selection. Clear one of the dropdowns or change the channel.</span>';
       }
 
       function refreshBuilder() {
@@ -546,7 +546,7 @@ function renderHtml(view) {
 
       function renderLinkItem(label, value) {
         if (!value) {
-          return '<div class="link-item"><div class="link-label">' + escapeHtml(label) + '</div><div class="empty">Not available for this result.</div></div>';
+          return '<div class="link-item"><div class="link-label">' + escapeHtml(label) + '</div><div class="empty">Not available for this link.</div></div>';
         }
         return '<div class="link-item"><div class="link-label">' + escapeHtml(label) + '</div><a class="link-value" href="' + escapeAttribute(value) + '" target="_blank" rel="noreferrer">' + escapeHtml(value) + '</a></div>';
       }
@@ -557,8 +557,8 @@ function renderHtml(view) {
         document.getElementById("result-subtitle").textContent = payload.client_display_name + " - " + payload.channel_display_name;
         document.getElementById("result-chips").innerHTML = [
           '<span class="chip">' + escapeHtml(payload.status_label) + '</span>',
-          payload.reused_existing ? '<span class="chip">Reused short link</span>' : '<span class="chip">Fresh request</span>',
-          payload.qr_url ? '<span class="chip">QR ready</span>' : '<span class="chip">QR optional</span>'
+          payload.reused_existing ? '<span class="chip">Existing short link reused</span>' : '<span class="chip">New saved link</span>',
+          payload.qr_url ? '<span class="chip">QR code ready</span>' : '<span class="chip">No QR code</span>'
         ].join("");
         document.getElementById("result-utm-grid").innerHTML = [
           ["Source", payload.utm_source],
@@ -568,16 +568,16 @@ function renderHtml(view) {
           ["Content", payload.utm_content === "" ? "(empty)" : payload.utm_content]
         ].map((entry) => '<div class="utm-tile"><strong>' + escapeHtml(entry[0]) + '</strong><div class="utm-value">' + escapeHtml(entry[1] || "--") + '</div></div>').join("");
         document.getElementById("result-links").innerHTML = [
-          renderLinkItem("Tracked URL", payload.tracked_url),
-          renderLinkItem("Short Link", payload.short_url),
-          renderLinkItem("QR", payload.qr_url),
-          renderLinkItem("Open In Library", payload.library_url)
+          renderLinkItem("Tracked link", payload.tracked_url),
+          renderLinkItem("Short link", payload.short_url),
+          renderLinkItem("QR code", payload.qr_url),
+          renderLinkItem("Open saved link", payload.library_url)
         ].join("");
         document.getElementById("result-copy").innerHTML = [
-          payload.tracked_url ? '<button type="button" class="mini-button" data-copy="' + escapeAttribute(payload.tracked_url) + '">Copy tracked URL</button>' : "",
+          payload.tracked_url ? '<button type="button" class="mini-button" data-copy="' + escapeAttribute(payload.tracked_url) + '">Copy tracked link</button>' : "",
           payload.short_url ? '<button type="button" class="mini-button" data-copy="' + escapeAttribute(payload.short_url) + '">Copy short link</button>' : "",
-          payload.qr_url ? '<button type="button" class="mini-button" data-copy="' + escapeAttribute(payload.qr_url) + '">Copy QR URL</button>' : "",
-          payload.library_url ? '<a class="ghost-button" href="' + escapeAttribute(payload.library_url) + '">Open in library</a>' : ""
+          payload.qr_url ? '<button type="button" class="mini-button" data-copy="' + escapeAttribute(payload.qr_url) + '">Copy QR code link</button>' : "",
+          payload.library_url ? '<a class="ghost-button" href="' + escapeAttribute(payload.library_url) + '">Open saved link</a>' : ""
         ].join("");
         document.getElementById("result-warnings").innerHTML = (payload.warnings || []).map((warning) => '<span class="chip warning">' + escapeHtml(warning) + '</span>').join("");
         shell.classList.add("visible");
@@ -646,7 +646,7 @@ function renderHtml(view) {
           }
         });
 
-        showStatus("Generating tracked link...", "");
+        showStatus("Creating link...", "");
         submitButton.disabled = true;
 
         try {
@@ -657,7 +657,7 @@ function renderHtml(view) {
           });
           const body = await response.json();
           if (!response.ok || body.status !== "ok") {
-            const message = body && body.error && body.error.message ? body.error.message : "Unable to generate the link right now.";
+            const message = body && body.error && body.error.message ? body.error.message : "Unable to create the link right now.";
             showStatus(message, "error");
             return;
           }
@@ -665,9 +665,9 @@ function renderHtml(view) {
           renderResult(body.result);
           showStatus(body.result.status === "completed_without_short_link"
             ? "Tracked link saved. Bitly quota blocked the short link."
-            : "Tracked link saved.", "success");
+            : "Link created.", "success");
         } catch (error) {
-          showStatus(error && error.message ? error.message : "Unable to generate the link right now.", "error");
+          showStatus(error && error.message ? error.message : "Unable to create the link right now.", "error");
         } finally {
           submitButton.disabled = false;
         }
@@ -699,13 +699,13 @@ function serializeResult(result) {
     request_id: result.requestId,
     status: result.status,
     status_label: result.status === "completed_without_short_link"
-      ? "Completed without short link"
-      : "Completed",
+      ? "Saved without short link"
+      : "Saved",
     message: result.status === "completed_without_short_link"
-      ? "Tracked URL ready"
+      ? "Tracked link created"
       : result.result.reusedExisting
-        ? "Tracked URL reused"
-        : "Tracked URL created",
+        ? "Tracked link created"
+        : "Tracked link created",
     client: normalized.client,
     client_display_name: normalized.clientDisplayName,
     channel: normalized.channel,

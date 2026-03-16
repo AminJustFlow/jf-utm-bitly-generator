@@ -5,8 +5,8 @@ const SORT_LABELS = {
   recent: "Newest first",
   oldest: "Oldest first",
   client: "Client A-Z",
-  campaign: "Campaign A-Z",
-  requests: "Most requests"
+  campaign: "Campaign name A-Z",
+  requests: "Most requests first"
 };
 
 const TOGGLE_LABELS = {
@@ -133,8 +133,8 @@ export class UtmLibraryController {
       deleted_requests: result.deletedRequests,
       redirect_url: `/utms?${buildQueryString({
         toast: result.deletedRequests > 1
-          ? "UTM entry removed. Matching history rows were deleted too."
-          : "UTM entry removed from the library.",
+          ? "Saved link deleted. Matching history rows were deleted too."
+          : "Saved link deleted.",
         toast_level: "success"
       })}`
     });
@@ -176,7 +176,7 @@ function renderHtml(view) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>UTM Library</title>
+  <title>Saved Links</title>
   <style>
     :root{--bg:#f4efe5;--panel:rgba(255,250,242,.94);--panel-strong:rgba(255,255,255,.86);--ink:#17302a;--muted:#66766f;--accent:#0d6c5e;--accent-dark:#0a5045;--line:rgba(23,48,42,.1);--shadow:0 24px 60px rgba(20,32,31,.09);--warning:#9a6708;--warning-bg:rgba(154,103,8,.12);--danger:#b4432b;--danger-bg:rgba(180,67,43,.12);}
     *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;color:var(--ink);font-family:"Aptos","Segoe UI",sans-serif;background:radial-gradient(circle at top left,rgba(13,108,94,.18),transparent 32rem),radial-gradient(circle at top right,rgba(183,142,65,.12),transparent 26rem),linear-gradient(180deg,#faf7f1 0%,var(--bg) 100%)}
@@ -208,19 +208,21 @@ function renderHtml(view) {
     .card.highlight{border-color:rgba(13,108,94,.34);box-shadow:0 0 0 3px rgba(13,108,94,.11),var(--shadow)}
     .eyebrow{color:var(--muted);font-size:.8rem;letter-spacing:.08em;text-transform:uppercase}
     .card-title{display:grid;gap:.35rem} .card-sub{color:var(--muted);font-size:.96rem}
-    .banner{display:grid;gap:.35rem;padding:.95rem 1rem;border:1px solid rgba(13,108,94,.12);border-radius:1.05rem;background:linear-gradient(135deg,rgba(13,108,94,.09),rgba(255,255,255,.68))}
-    .banner-label{font-size:.8rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
-    .banner-value{font-size:clamp(1.08rem,2vw,1.5rem);font-weight:700;line-height:1.06;letter-spacing:-.04em;word-break:break-word}
-    .card-grid{display:grid;gap:1rem;grid-template-columns:minmax(17rem,1.15fr) minmax(18rem,1.25fr) minmax(14rem,.95fr)}
+    .banner{display:grid;gap:.75rem;padding:.8rem .95rem;border:1px solid rgba(13,108,94,.12);border-radius:1.05rem;background:linear-gradient(135deg,rgba(13,108,94,.08),rgba(255,255,255,.7));grid-template-columns:auto minmax(0,1fr) auto;align-items:center}
+    .banner-label{font-size:.78rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+    .banner-main{display:grid;gap:.18rem;min-width:0}
+    .banner-value{font-size:clamp(1rem,1.5vw,1.22rem);font-weight:700;line-height:1.06;letter-spacing:-.04em;word-break:break-word}
+    .banner-meta{color:var(--muted);font-size:.88rem;line-height:1.35;word-break:break-word}
+    .card-grid{display:grid;gap:1rem;grid-template-columns:minmax(16rem,1.05fr) minmax(20rem,1.35fr) minmax(13rem,.9fr)}
     .section{display:grid;gap:.75rem;align-content:start;min-width:0} .section h4{font-size:.88rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
     .utm-grid{display:grid;gap:.65rem;grid-template-columns:repeat(2,minmax(0,1fr))}
-    .utm-tile{min-height:5rem;padding:.82rem .88rem;border:1px solid var(--line);border-radius:1rem;background:rgba(255,255,255,.72)} .utm-tile strong{display:block;margin-bottom:.45rem;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)} .utm-value{word-break:break-word;line-height:1.4}
+    .utm-tile{min-height:4.5rem;padding:.76rem .82rem;border:1px solid var(--line);border-radius:1rem;background:rgba(255,255,255,.72)} .utm-tile strong{display:block;margin-bottom:.4rem;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)} .utm-value{word-break:break-word;line-height:1.4}
     .list{display:flex;flex-direction:column;gap:.75rem}
     .link-item,.usage-item{padding-bottom:.72rem;border-bottom:1px dashed rgba(23,48,42,.11)} .link-item:last-child,.usage-item:last-child{padding-bottom:0;border-bottom:0}
     .link-label{margin-bottom:.35rem;color:var(--muted);font-size:.8rem;letter-spacing:.06em;text-transform:uppercase}
-    .link-target{display:flex;justify-content:space-between;gap:.75rem;flex-wrap:wrap;align-items:flex-start}
-    .link-value{min-width:0;flex:1 1 16rem;color:var(--accent-dark);text-decoration:none;word-break:break-word;line-height:1.45}
-    .qr-frame{width:min(100%,12.5rem);aspect-ratio:1;border:1px solid var(--line);border-radius:1.1rem;background:linear-gradient(135deg,rgba(255,255,255,.92),rgba(242,236,224,.9));overflow:hidden;display:grid;place-items:center}
+    .link-target{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.75rem;align-items:flex-start}
+    .link-value{min-width:0;display:block;padding:.68rem .76rem;border:1px solid var(--line);border-radius:.95rem;background:rgba(255,255,255,.76);color:var(--accent-dark);text-decoration:none;word-break:break-word;line-height:1.5;font-family:"Aptos Mono","Cascadia Code","Consolas",monospace;font-size:.9rem}
+    .qr-frame{width:min(100%,11rem);aspect-ratio:1;border:1px solid var(--line);border-radius:1.1rem;background:linear-gradient(135deg,rgba(255,255,255,.92),rgba(242,236,224,.9));overflow:hidden;display:grid;place-items:center}
     .qr-frame img{width:100%;height:100%;display:block;object-fit:cover;background:#fff} .qr-placeholder{padding:1rem;text-align:center;color:var(--muted);line-height:1.5;font-size:.92rem}
     .usage-item{display:flex;justify-content:space-between;gap:.75rem;align-items:baseline} .usage-item strong{color:var(--muted);font-size:.82rem;letter-spacing:.06em;text-transform:uppercase} .usage-item span{text-align:right;line-height:1.4}
     .warnings{display:flex;gap:.45rem;flex-wrap:wrap}
@@ -232,8 +234,8 @@ function renderHtml(view) {
     .form-status{min-height:1.2rem;font-size:.88rem;color:var(--muted)} .form-status.error{color:var(--danger)} .form-status.success{color:var(--accent)}
     .empty{padding:3.25rem 1rem;text-align:center;border:1px dashed rgba(23,48,42,.16);border-radius:1.2rem;background:rgba(255,255,255,.55)}
     .toast{position:fixed;right:1rem;bottom:1rem;max-width:22rem;padding:.85rem 1rem;border-radius:1rem;background:rgba(23,48,42,.94);color:#fff;box-shadow:0 18px 36px rgba(23,48,42,.28);opacity:0;pointer-events:none;transform:translateY(12px);transition:opacity 140ms ease,transform 140ms ease} .toast.warning{background:rgba(154,103,8,.96)} .toast.error{background:rgba(180,67,43,.96)} .toast.visible{opacity:1;transform:translateY(0)}
-    @media (max-width:1220px){.filters{grid-template-columns:repeat(3,minmax(0,1fr))}.card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sidebar{grid-column:span 2}}
-    @media (max-width:860px){.filters,.editor-grid,.editor-grid.wide,.card-grid,.utm-grid{grid-template-columns:1fr}.sidebar{grid-column:auto}}
+    @media (max-width:1220px){.filters{grid-template-columns:repeat(3,minmax(0,1fr))}.card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sidebar{grid-column:span 2}.banner{grid-template-columns:auto minmax(0,1fr)}}
+    @media (max-width:860px){.filters,.editor-grid,.editor-grid.wide,.card-grid,.utm-grid{grid-template-columns:1fr}.sidebar{grid-column:auto}.banner{grid-template-columns:1fr}}
     @media (max-width:640px){.shell{padding-inline:.85rem}.hero,.panel,.card{border-radius:1rem}.hero-top,.panel-head,.results-head,.card-head,.pagination,.usage-item,.link-target{display:grid}.usage-item span{text-align:left}}
   </style>
 </head>
@@ -243,49 +245,49 @@ function renderHtml(view) {
     <section class="hero">
       <div class="hero-top">
         <div>
-          <h1>UTM Library</h1>
-          <p class="lede">Browse, filter, and edit tracked links from one place. Updating a card creates a fresh generation request so history stays intact while the team gets the latest UTM, short link, and QR output.</p>
+          <h1>Saved Links</h1>
+          <p class="lede">Browse, filter, edit, and remove tracked links in one place. Updating a card creates a new saved version so the team can keep the latest tracked link, short link, and QR code.</p>
         </div>
         <div class="hero-actions">
           <span class="badge"><strong>${activeFilterCount}</strong> active filter${activeFilterCount === 1 ? "" : "s"}</span>
-          <a class="link-button" href="${csvHref}">Export CSV</a>
-          <a class="link-button" href="${jsonHref}">JSON</a>
+          <a class="link-button" href="${csvHref}">Download CSV</a>
+          <a class="link-button" href="${jsonHref}">Download JSON</a>
         </div>
       </div>
       <div class="stats">
-        <div class="stat"><strong>${library.summary.totalUniqueLinks}</strong><span>Unique tracked links</span></div>
-        <div class="stat"><strong>${library.summary.filteredLinks}</strong><span>Visible after filters</span></div>
-        <div class="stat"><strong>${library.summary.requestsRepresented}</strong><span>Requests represented</span></div>
-        <div class="stat"><strong>${library.summary.withQr}</strong><span>Visible entries with QR</span></div>
+        <div class="stat"><strong>${library.summary.totalUniqueLinks}</strong><span>Saved links</span></div>
+        <div class="stat"><strong>${library.summary.filteredLinks}</strong><span>Links shown</span></div>
+        <div class="stat"><strong>${library.summary.requestsRepresented}</strong><span>Total requests</span></div>
+        <div class="stat"><strong>${library.summary.withQr}</strong><span>Links with QR codes</span></div>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-head">
         <div>
-          <h2>Filter Library</h2>
-          <div class="meta">Search campaigns, UTM fields, URLs, and original request text. Exact source and medium filters help match manual taxonomies faster.</div>
+          <h2>Find Links</h2>
+          <div class="meta">Search by client, campaign, URL, or original request message. Use the source and medium filters when you need a very specific link.</div>
         </div>
         <div class="chips">
-          <span class="badge"><strong>${library.summary.withoutShortLink}</strong> visible without short link</span>
+          <span class="badge"><strong>${library.summary.withoutShortLink}</strong> shown without short link</span>
         </div>
       </div>
       <form method="get" action="/utms" class="filters">
-        <label>Search<input type="search" name="search" value="${escapeHtml(library.filters.search)}" placeholder="Client, campaign, UTM, URL, message"></label>
+        <label>Search<input type="search" name="search" value="${escapeHtml(library.filters.search)}" placeholder="Client, campaign, URL, or message"></label>
         <label>Client<select name="client">${renderOptions("All clients", "", library.available.clients, library.filters.client)}</select></label>
         <label>Channel<select name="channel">${renderOptions("All channels", "", library.available.channels, library.filters.channel)}</select></label>
         <label>Source<select name="source">${renderTextOptions("All sources", "", library.available.sources, library.filters.source)}</select></label>
         <label>Medium<select name="medium">${renderTextOptions("All mediums", "", library.available.mediums, library.filters.medium)}</select></label>
-        <label>Campaign<input type="text" name="campaign" value="${escapeHtml(library.filters.campaign)}" placeholder="spring_sale"></label>
+        <label>Campaign name<input type="text" name="campaign" value="${escapeHtml(library.filters.campaign)}" placeholder="spring_sale"></label>
         <label>Status<select name="status">${renderOptions("All statuses", "all", library.available.statuses.filter((value) => value !== "all"), library.filters.status)}</select></label>
-        <label>Short Link<select name="short_link">${renderToggleOptions(library.available.shortLinkStates, library.filters.shortLink)}</select></label>
-        <label>QR<select name="qr">${renderToggleOptions(library.available.qrStates, library.filters.qr)}</select></label>
+        <label>Short link<select name="short_link">${renderToggleOptions(library.available.shortLinkStates, library.filters.shortLink)}</select></label>
+        <label>QR code<select name="qr">${renderToggleOptions(library.available.qrStates, library.filters.qr)}</select></label>
         <label>Sort<select name="sort">${renderSortOptions(library.available.sorts, library.filters.sort)}</select></label>
-        <label>Rows<select name="per_page">${renderPerPageOptions(library.filters.perPage)}</select></label>
+        <label>Links per page<select name="per_page">${renderPerPageOptions(library.filters.perPage)}</select></label>
         <input type="hidden" name="page" value="1">
         <div class="actions">
-          <button class="button" type="submit">Apply Filters</button>
-          <a class="link-button" href="/utms">Reset</a>
+          <button class="button" type="submit">Show Results</button>
+          <a class="link-button" href="/utms">Clear Filters</a>
         </div>
       </form>
     </section>
@@ -293,21 +295,21 @@ function renderHtml(view) {
     <section class="panel">
       <div class="results-head">
         <div>
-          <h2>Results</h2>
-          <div class="meta">Page ${library.pagination.page} of ${library.pagination.pageCount} - ${library.pagination.total} result(s)</div>
+          <h2>Matching Links</h2>
+          <div class="meta">Page ${library.pagination.page} of ${library.pagination.pageCount} - ${library.pagination.total} link(s)</div>
         </div>
         <div class="chips">
           <span class="chip neutral">${escapeHtml(SORT_LABELS[library.filters.sort] ?? "Newest first")}</span>
-          <span class="chip neutral">${library.summary.requestsRepresented} request${library.summary.requestsRepresented === 1 ? "" : "s"} represented</span>
+          <span class="chip neutral">${library.summary.requestsRepresented} request${library.summary.requestsRepresented === 1 ? "" : "s"} included</span>
         </div>
       </div>
       <div class="grid">
         ${library.items.length > 0
           ? library.items.map((item) => renderResultCard(item, { highlightRequestId, editorOptions })).join("")
-          : '<div class="empty">No UTM entries matched the current filters.</div>'}
+          : '<div class="empty">No saved links matched your filters.</div>'}
       </div>
       <div class="pagination">
-        <div class="meta">Use the editor on any card to regenerate updated UTMs, request a QR, or refresh a link while keeping the earlier version in history.</div>
+        <div class="meta">Open any card to update a link, add a QR code, or remove it from the saved history.</div>
         <div class="page-links">${renderPaginationLinks(library.pagination, queryBase)}</div>
       </div>
     </section>
@@ -360,7 +362,7 @@ function renderHtml(view) {
         const payload = Object.fromEntries(new FormData(form).entries());
         payload.needs_qr = form.querySelector("[name='needs_qr']").checked;
         if (status) {
-          status.textContent = "Saving updated link...";
+          status.textContent = "Saving changes...";
           status.className = "form-status";
         }
         if (submitButton) {
@@ -383,7 +385,7 @@ function renderHtml(view) {
             return;
           }
           if (status) {
-            status.textContent = "Saved. Reloading the updated library entry...";
+            status.textContent = "Saved. Reloading this link...";
             status.className = "form-status success";
           }
           window.location.assign(body.redirect_url || "/utms");
@@ -406,7 +408,7 @@ function renderHtml(view) {
         event.preventDefault();
         const requestId = button.getAttribute("data-delete-request-id");
         if (!requestId) return;
-        if (!window.confirm("Remove this UTM entry from the library? This deletes the saved history for this tracked link.")) {
+        if (!window.confirm("Delete this saved link? This removes the saved history for this tracked link.")) {
           return;
         }
         button.disabled = true;
@@ -418,13 +420,13 @@ function renderHtml(view) {
           });
           const body = await response.json();
           if (!response.ok || body.status !== "ok") {
-            const message = body && body.error && body.error.message ? body.error.message : "Unable to remove this UTM entry right now.";
+            const message = body && body.error && body.error.message ? body.error.message : "Unable to delete this saved link right now.";
             showToast(message, "error");
             return;
           }
           window.location.assign(body.redirect_url || "/utms");
         } catch (error) {
-          const message = error && error.message ? error.message : "Unable to remove this UTM entry right now.";
+          const message = error && error.message ? error.message : "Unable to delete this saved link right now.";
           showToast(message, "error");
         } finally {
           button.disabled = false;
@@ -497,33 +499,37 @@ function renderCsv(items) {
 
 function renderResultCard(item, { highlightRequestId, editorOptions }) {
   const campaignValue = item.utmCampaign || item.canonicalCampaign || "(none)";
+  const campaignMeta = buildCampaignMeta(item, campaignValue);
   const subtitleParts = [item.channelDisplayName, item.assetType ? humanize(item.assetType) : ""].filter(Boolean);
   const isHighlighted = highlightRequestId === item.requestId;
 
   return `<article class="card${isHighlighted ? " highlight" : ""}" id="request-${item.requestId}" data-highlight="${isHighlighted ? "true" : "false"}">
     <div class="card-head">
       <div class="card-title">
-        <div class="eyebrow">Last seen ${escapeHtml(formatDate(item.lastCreatedAt))}</div>
+        <div class="eyebrow">Most recent request ${escapeHtml(formatDate(item.lastCreatedAt))}</div>
         <h3>${escapeHtml(item.clientDisplayName)}</h3>
         <div class="card-sub">${escapeHtml(subtitleParts.join(" - "))}</div>
       </div>
       <div class="chips">
-        <button type="button" class="danger-button mini" data-delete-request-id="${escapeAttribute(item.requestId)}">Delete Entry</button>
+        <button type="button" class="danger-button mini" data-delete-request-id="${escapeAttribute(item.requestId)}">Delete Link</button>
         ${renderChip(item.assetType)}
         ${renderStatusChip(item.status)}
-        ${renderChip(item.hasShortUrl ? "Short link ready" : "No short link", item.hasShortUrl ? "default" : "warning")}
-        ${renderChip(item.hasQr ? "QR ready" : "QR optional", item.hasQr ? "default" : "neutral")}
+        ${renderChip(item.hasShortUrl ? "Short link ready" : "Short link unavailable", item.hasShortUrl ? "default" : "warning")}
+        ${renderChip(item.hasQr ? "QR code ready" : "No QR code", item.hasQr ? "default" : "neutral")}
         <span class="chip neutral">${item.requestCount} request${item.requestCount === 1 ? "" : "s"}</span>
       </div>
     </div>
     <div class="banner">
       <div class="banner-label">Campaign</div>
-      <div class="banner-value">${escapeHtml(campaignValue)}</div>
-      <div class="meta">${escapeHtml(item.campaignLabel || item.canonicalCampaign || "No source campaign label captured.")}</div>
+      <div class="banner-main">
+        <div class="banner-value">${escapeHtml(campaignValue)}</div>
+        ${campaignMeta ? `<div class="banner-meta">${escapeHtml(campaignMeta)}</div>` : ""}
+      </div>
+      <span class="chip neutral">${item.hasShortUrl ? "Short link ready" : item.hasQr ? "QR code ready" : "Saved link"}</span>
     </div>
     <div class="card-grid">
       <section class="section">
-        <h4>UTM Fields</h4>
+        <h4>UTM Values</h4>
         <div class="utm-grid">
           ${renderUtmTile("Source", item.utmSource)}
           ${renderUtmTile("Medium", item.utmMedium)}
@@ -535,36 +541,36 @@ function renderResultCard(item, { highlightRequestId, editorOptions }) {
       <section class="section">
         <h4>Links</h4>
         <div class="list">
-          ${renderLinkItem("Destination", item.destinationUrl)}
-          ${renderLinkItem("Tracked URL", item.finalLongUrl)}
-          ${renderLinkItem("Short Link", item.shortUrl)}
+          ${renderLinkItem("Destination page", item.destinationUrl)}
+          ${renderLinkItem("Tracked link", item.finalLongUrl)}
+          ${renderLinkItem("Short link", item.shortUrl)}
         </div>
       </section>
       <section class="section sidebar">
-        <h4>QR Preview And Usage</h4>
+        <h4>QR Code And Details</h4>
         ${renderQrPanel(item)}
         <div class="list">
-          ${renderUsageItem("Request ID", `#${item.requestId}`)}
-          ${renderUsageItem("First seen", formatDate(item.firstCreatedAt))}
-          ${renderUsageItem("Latest action", item.reusedExisting ? "Reused existing short link" : "Created or refreshed link")}
+          ${renderUsageItem("Record ID", `#${item.requestId}`)}
+          ${renderUsageItem("First request", formatDate(item.firstCreatedAt))}
+          ${renderUsageItem("Most recent result", item.reusedExisting ? "Reused an existing short link" : "Created or refreshed this link")}
         </div>
         ${renderWarnings(item.warnings)}
       </section>
     </div>
     <details${isHighlighted ? " open" : ""}>
-      <summary>Edit and regenerate</summary>
+      <summary>Edit this link</summary>
       ${renderEditor(item, editorOptions)}
     </details>
     <details>
-      <summary>Original request</summary>
-      <p class="request">${escapeHtml(item.originalMessage || "No original message stored.")}</p>
+      <summary>Original message</summary>
+      <p class="request">${escapeHtml(item.originalMessage || "No original message was saved.")}</p>
     </details>
   </article>`;
 }
 
 function renderEditor(item, editorOptions) {
   return `<div class="editor">
-    <div class="editor-note">Editing here creates a fresh request entry. If the updated UTM combination already exists, the library reuses the matching short link; if not, it generates a new one and can also create a QR.</div>
+    <div class="editor-note">Saving changes creates a new saved version of this link. If the same tracked link already exists, the app reuses the matching short link. If not, it creates a new one and can also add a QR code.</div>
     <form data-regenerate-form>
       <input type="hidden" name="original_request_id" value="${escapeAttribute(item.requestId)}">
       <div class="editor-grid">
@@ -572,26 +578,52 @@ function renderEditor(item, editorOptions) {
         <label>Channel<select name="channel">${renderOptions("Select channel", "", editorOptions.channels, item.channel)}</select></label>
       </div>
       <div class="editor-grid">
-        <label>Campaign Label<input type="text" name="campaign_label" value="${escapeAttribute(item.campaignLabel || item.utmCampaign || "")}" placeholder="spring sale"></label>
-        <label>Destination URL<input type="url" name="destination_url" value="${escapeAttribute(item.destinationUrl)}" placeholder="https://example.com/page"></label>
+        <label>Campaign name<input type="text" name="campaign_label" value="${escapeAttribute(item.campaignLabel || item.utmCampaign || "")}" placeholder="spring sale"></label>
+        <label>Destination page URL<input type="url" name="destination_url" value="${escapeAttribute(item.destinationUrl)}" placeholder="https://example.com/page"></label>
       </div>
       <div class="editor-grid wide">
-        <label>UTM Source<input type="text" name="utm_source" value="${escapeAttribute(item.utmSource)}" placeholder="Leave blank for defaults"></label>
-        <label>UTM Medium<input type="text" name="utm_medium" value="${escapeAttribute(item.utmMedium)}" placeholder="Leave blank for defaults"></label>
-        <label>UTM Campaign<input type="text" name="utm_campaign" value="${escapeAttribute(item.utmCampaign)}" placeholder="Leave blank for defaults"></label>
+        <label>Source<input type="text" name="utm_source" value="${escapeAttribute(item.utmSource)}" placeholder="Leave blank to use the default"></label>
+        <label>Medium<input type="text" name="utm_medium" value="${escapeAttribute(item.utmMedium)}" placeholder="Leave blank to use the default"></label>
+        <label>Campaign<input type="text" name="utm_campaign" value="${escapeAttribute(item.utmCampaign)}" placeholder="Leave blank to use the default"></label>
       </div>
       <div class="editor-grid">
-        <label>UTM Term<input type="text" name="utm_term" value="${escapeAttribute(item.utmTerm)}" placeholder="Leave empty if not used"></label>
-        <label>UTM Content<input type="text" name="utm_content" value="${escapeAttribute(item.utmContent)}" placeholder="Leave empty if not used"></label>
+        <label>Term<input type="text" name="utm_term" value="${escapeAttribute(item.utmTerm)}" placeholder="Leave empty if not used"></label>
+        <label>Content<input type="text" name="utm_content" value="${escapeAttribute(item.utmContent)}" placeholder="Leave empty if not used"></label>
       </div>
-      <label class="checkbox"><input type="checkbox" name="needs_qr"${item.hasQr ? " checked" : ""}>Generate QR code for this version</label>
+      <label class="checkbox"><input type="checkbox" name="needs_qr"${item.hasQr ? " checked" : ""}>Create a QR code for this saved version</label>
       <div class="actions">
-        <button class="button" type="submit" data-submit>Update And Generate</button>
-        <button class="link-button" type="reset">Reset Fields</button>
+        <button class="button" type="submit" data-submit>Save Changes</button>
+        <button class="link-button" type="reset">Reset Form</button>
         <div class="form-status" data-form-status></div>
       </div>
     </form>
   </div>`;
+}
+
+function buildCampaignMeta(item, campaignValue) {
+  const candidates = [
+    item.campaignLabel,
+    item.canonicalCampaign
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+
+  const firstDifferent = candidates.find((value) => normalizeComparable(value) !== normalizeComparable(campaignValue));
+  if (firstDifferent) {
+    return `Label: ${firstDifferent}`;
+  }
+
+  if (item.utmTerm && item.utmContent) {
+    return `Term ${item.utmTerm} · Content ${item.utmContent}`;
+  }
+
+  if (item.utmTerm) {
+    return `Term ${item.utmTerm}`;
+  }
+
+  if (item.utmContent) {
+    return `Content ${item.utmContent}`;
+  }
+
+  return "";
 }
 
 function renderOptions(defaultLabel, defaultValue, values, selected) {
@@ -650,8 +682,10 @@ function renderStatusChip(status) {
   }
 
   const label = status === "completed_without_short_link"
-    ? "Completed without short link"
-    : humanize(status);
+    ? "Saved without short link"
+    : status === "completed"
+      ? "Saved"
+      : humanize(status);
   return renderChip(label, status === "completed_without_short_link" ? "warning" : "default");
 }
 
@@ -808,6 +842,13 @@ function humanize(value) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function normalizeComparable(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "");
 }
 
 function escapeHtml(value) {
