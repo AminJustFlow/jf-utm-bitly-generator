@@ -12,6 +12,9 @@ export async function createServer(projectRoot) {
     const response = await app.handle(request);
     response.send(serverResponse);
   });
+  server.on("close", () => {
+    app.stop().catch(() => {});
+  });
 
   return { app, server };
 }
@@ -23,6 +26,7 @@ export async function startServer(projectRoot) {
   await new Promise((resolve) => {
     server.listen(port, resolve);
   });
+  await app.start();
 
   return { app, server, port };
 }

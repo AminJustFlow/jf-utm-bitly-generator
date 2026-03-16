@@ -11,7 +11,7 @@ export class RequestNormalizer {
   normalize(parsed) {
     const warnings = [...parsed.warnings];
     const missingFields = [...parsed.missingFields];
-    const correctedCampaignLabel = this.rulesService.normalizeCampaignLabel(parsed.campaignLabel);
+    const correctedCampaignLabel = this.rulesService.normalizeCampaignLabel(parsed.campaignLabel, parsed.client);
 
     if (correctedCampaignLabel && parsed.campaignLabel && correctedCampaignLabel !== String(parsed.campaignLabel).trim().toLowerCase()) {
       warnings.push(`Campaign label corrected to "${correctedCampaignLabel}".`);
@@ -34,12 +34,19 @@ export class RequestNormalizer {
       missingFields.push("client");
     }
 
-    const channel = this.rulesService.normalizeChannel(parsed.channel, parsed.assetType, parsed.needsQr);
+    const channel = this.rulesService.normalizeChannel(parsed.channel, parsed.assetType, parsed.needsQr, {
+      client,
+      source: parsed.utmSource,
+      medium: parsed.utmMedium
+    });
     if (!channel) {
       missingFields.push("channel");
     }
 
-    const assetType = this.rulesService.normalizeAssetType(parsed.assetType, channel);
+    const assetType = this.rulesService.normalizeAssetType(parsed.assetType, channel, {
+      source: parsed.utmSource,
+      medium: parsed.utmMedium
+    });
     if (!assetType) {
       missingFields.push("asset_type");
     }
@@ -109,7 +116,7 @@ export class RequestNormalizer {
 
   buildClarificationMessage(missingFields, confidence) {
     if (missingFields.includes("channel")) {
-      return `I found the URL and likely client, but I could not confidently identify the channel. Please reply with one of: ${this.rulesService.channels().join(", ")}.`;
+      return "I found the URL and likely client, but I could not confidently identify the source or channel. Please reply with the source/medium you want used, or use the strict format.";
     }
 
     if (missingFields.includes("client")) {

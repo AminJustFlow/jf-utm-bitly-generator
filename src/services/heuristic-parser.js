@@ -96,6 +96,7 @@ export class HeuristicParser {
 
     let bestMatch = null;
     let bestDistance = Number.POSITIVE_INFINITY;
+    let bestSpecificity = -1;
     let duplicateBest = false;
 
     for (const candidate of candidates) {
@@ -106,28 +107,34 @@ export class HeuristicParser {
         continue;
       }
 
+      const comparableCandidate = normalizeComparable(candidate.value);
+      if (comparableCandidate.length < 3) {
+        continue;
+      }
+
       const width = candidateWords.length;
       for (let index = 0; index <= words.length - width; index += 1) {
         const phrase = words.slice(index, index + width).join(" ");
-        const distance = levenshtein(normalizeComparable(phrase), normalizeComparable(candidate.value));
-        const maxDistance = normalizeComparable(candidate.value).length >= 8 ? 2 : 1;
+        const distance = levenshtein(normalizeComparable(phrase), comparableCandidate);
+        const maxDistance = comparableCandidate.length >= 8 ? 2 : 1;
 
         if (distance > maxDistance) {
           continue;
         }
 
-        if (distance < bestDistance) {
+        if (distance < bestDistance || (distance === bestDistance && comparableCandidate.length > bestSpecificity)) {
           bestMatch = {
             ...candidate,
             matchedText: phrase,
             terms: [...new Set([...(candidate.terms ?? []), phrase])]
           };
           bestDistance = distance;
+          bestSpecificity = comparableCandidate.length;
           duplicateBest = false;
           continue;
         }
 
-        if (distance === bestDistance && candidate.key !== bestMatch?.key) {
+        if (distance === bestDistance && comparableCandidate.length === bestSpecificity && candidate.key !== bestMatch?.key) {
           duplicateBest = true;
         }
       }

@@ -6,15 +6,72 @@ export class UtmLibraryEditorService {
     requestRepository,
     requestNormalizer,
     fingerprintService,
-    linkGenerationService
+    linkGenerationService,
+    generatedLinkRepository
   }) {
     this.requestRepository = requestRepository;
     this.requestNormalizer = requestNormalizer;
     this.fingerprintService = fingerprintService;
     this.linkGenerationService = linkGenerationService;
+    this.generatedLinkRepository = generatedLinkRepository;
   }
 
   async regenerate(input = {}) {
+    return this.submit(input, {
+      requestSource: "utm_library_editor",
+      sourceUserId: "utm_library",
+      sourceUserName: "UTM Library",
+      messageLabel: "Library editor update"
+    });
+  }
+
+  async create(input = {}) {
+    return this.submit(input, {
+      requestSource: "utm_builder",
+      sourceUserId: "utm_builder",
+      sourceUserName: "UTM Builder",
+      messageLabel: "Builder form submission"
+    });
+  }
+
+  async deleteEntry(input = {}) {
+    const requestId = positiveInteger(input.request_id ?? input.original_request_id, null);
+    if (!requestId) {
+      return {
+        ok: false,
+        statusCode: 422,
+        code: "missing_request_id",
+        message: "Select a valid UTM entry to remove."
+      };
+    }
+
+    const existing = this.requestRepository.findById(requestId);
+    if (!existing) {
+      return {
+        ok: false,
+        statusCode: 404,
+        code: "request_not_found",
+        message: "That UTM entry no longer exists."
+      };
+    }
+
+    const fingerprint = normalizeOptional(existing.fingerprint);
+    const deletedRequests = fingerprint
+      ? this.requestRepository.deleteByFingerprint(fingerprint)
+      : this.requestRepository.deleteByRequestUuid(existing.request_uuid);
+
+    if (fingerprint && this.requestRepository.countByFingerprint(fingerprint) === 0) {
+      this.generatedLinkRepository.deleteByFingerprint(fingerprint);
+    }
+
+    return {
+      ok: true,
+      requestId,
+      deletedRequests
+    };
+  }
+
+  async submit(input = {}, context) {
     const parsed = ParsedLinkRequest.fromObject({
       client: normalizeOptional(input.client),
       channel: normalizeOptional(input.channel),
@@ -29,7 +86,7 @@ export class UtmLibraryEditorService {
       confidence: 1,
       warnings: [],
       missing_fields: []
-    }, "utm_library_editor", {
+    }, context.requestSource, {
       original_request_id: input.original_request_id ?? null
     });
 
@@ -52,9 +109,9 @@ export class UtmLibraryEditorService {
       requestUuid: crypto.randomUUID(),
       deliveryKey: `utm-library:${crypto.randomUUID()}`,
       status: "received",
-      originalMessage: buildOriginalMessage(normalized, input.original_request_id),
+      originalMessage: buildOriginalMessage(normalized, context.messageLabel, input.original_request_id),
       rawPayload: {
-        source: "utm_library_editor",
+        source: context.requestSource,
         original_request_id: input.original_request_id ?? null,
         submitted_values: {
           client: input.client ?? null,
@@ -69,8 +126,8 @@ export class UtmLibraryEditorService {
           needs_qr: Boolean(input.needs_qr)
         }
       },
-      sourceUserId: "utm_library",
-      sourceUserName: "UTM Library",
+      sourceUserId: context.sourceUserId,
+      sourceUserName: context.sourceUserName,
       createdAt: timestamp,
       updatedAt: timestamp
     });
@@ -154,9 +211,9 @@ export class UtmLibraryEditorService {
   }
 }
 
-function buildOriginalMessage(normalized, originalRequestId) {
+function buildOriginalMessage(normalized, messageLabel, originalRequestId) {
   const parts = [
-    `Library editor update${originalRequestId ? ` from request #${originalRequestId}` : ""}`,
+    `${messageLabel}${originalRequestId ? ` from request #${originalRequestId}` : ""}`,
     `Client: ${normalized.clientDisplayName}`,
     `Channel: ${normalized.channelDisplayName}`,
     `Campaign: ${normalized.utmCampaign}`,
@@ -177,4 +234,9 @@ function normalizeNullable(value) {
   }
 
   return String(value).trim();
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }

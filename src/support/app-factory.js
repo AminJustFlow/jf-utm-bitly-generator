@@ -13,6 +13,8 @@ import { HealthController } from "../controllers/health-controller.js";
 import { DebugController } from "../controllers/debug-controller.js";
 import { ClickUpWebhookController } from "../controllers/clickup-webhook-controller.js";
 import { UtmLibraryController } from "../controllers/utm-library-controller.js";
+import { UtmBuilderController } from "../controllers/utm-builder-controller.js";
+import { UtmImportController } from "../controllers/utm-import-controller.js";
 import { RequestRepository } from "../repositories/request-repository.js";
 import { GeneratedLinkRepository } from "../repositories/generated-link-repository.js";
 import { AuditLogRepository } from "../repositories/audit-log-repository.js";
@@ -36,6 +38,9 @@ import { LinkWorkflowService } from "../services/link-workflow-service.js";
 import { UtmLibraryService } from "../services/utm-library-service.js";
 import { UtmLibraryEditorService } from "../services/utm-library-editor-service.js";
 import { BasicAuthService } from "../services/basic-auth-service.js";
+import { XlsxWorkbookReader } from "../services/xlsx-workbook-reader.js";
+import { TrackerImportService } from "../services/tracker-import-service.js";
+import { ReceivedRequestRecoveryService } from "../services/received-request-recovery-service.js";
 
 export async function createApplication(projectRoot) {
   loadEnvFile(path.join(projectRoot, ".env"));
@@ -71,6 +76,7 @@ export async function createApplication(projectRoot) {
   const clickUpChatService = new ClickUpChatService(httpClient, config.clickup);
   const messageFormatter = new MessageFormatter();
   const libraryAuthService = new BasicAuthService(config.libraryAuth);
+  const workbookReader = new XlsxWorkbookReader();
   const linkGenerationService = new LinkGenerationService({
     generatedLinkRepository,
     bitlyService,
@@ -92,7 +98,27 @@ export async function createApplication(projectRoot) {
     requestRepository,
     requestNormalizer,
     fingerprintService,
-    linkGenerationService
+    linkGenerationService,
+    generatedLinkRepository
+  });
+  const trackerImportService = new TrackerImportService({
+    workbookReader,
+    requestRepository,
+    generatedLinkRepository,
+    rulesService,
+    fingerprintService,
+    urlService,
+    qrCodeService
+  });
+  const receivedRequestRecoveryService = new ReceivedRequestRecoveryService({
+    requestRepository,
+    auditLogRepository,
+    workflowService,
+    logger,
+    enabled: config.app.recoveryEnabled,
+    intervalMs: config.app.recoveryPollMs,
+    graceSeconds: config.app.recoveryGraceSeconds,
+    batchSize: config.app.recoveryBatchSize
   });
 
   const healthController = new HealthController({ database, config });
@@ -116,19 +142,39 @@ export async function createApplication(projectRoot) {
     utmLibraryEditorService,
     rulesService
   });
+  const utmBuilderController = new UtmBuilderController({
+    utmLibraryEditorService,
+    rulesService
+  });
+  const utmImportController = new UtmImportController({
+    trackerImportService
+  });
 
   const router = new Router();
   router.add("GET", "/health", (request) => healthController.handle(request));
+  router.add("GET", "/new", protectLibraryRoute(libraryAuthService, (request) => utmBuilderController.handleHtml(request)));
+  router.add("POST", "/new", protectLibraryRoute(libraryAuthService, (request) => utmBuilderController.handleCreate(request)));
+  router.add("GET", "/imports", protectLibraryRoute(libraryAuthService, (request) => utmImportController.handleHtml(request)));
+  router.add("POST", "/imports", protectLibraryRoute(libraryAuthService, (request) => utmImportController.handleImport(request)));
+  router.add("POST", "/imports/reset", protectLibraryRoute(libraryAuthService, (request) => utmImportController.handleReset(request)));
   router.add("GET", "/utms", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleHtml(request)));
   router.add("GET", "/utms.json", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleJson(request)));
   router.add("GET", "/utms.csv", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleCsv(request)));
   router.add("POST", "/utms/regenerate", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleRegenerate(request)));
+  router.add("POST", "/utms/delete", protectLibraryRoute(libraryAuthService, (request) => utmLibraryController.handleDelete(request)));
   router.add("GET", "/debug/sample-payload", (request) => debugController.handleSample(request));
   router.add("GET", "/debug/webhook-info", (request) => debugController.handleInfo(request));
   router.add("POST", "/debug/webhook-echo", (request) => debugController.handleEcho(request));
   router.add("POST", "/webhooks/clickup/chat", (request) => clickUpWebhookController.handle(request));
 
-  return new Application(router, migrationRunner, config);
+  return new Application(router, migrationRunner, config, {
+    start: async () => {
+      receivedRequestRecoveryService.start();
+    },
+    stop: async () => {
+      receivedRequestRecoveryService.stop();
+    }
+  });
 }
 
 function resolveConfig(projectRoot) {
@@ -142,7 +188,11 @@ function resolveConfig(projectRoot) {
       timezone: process.env.DEFAULT_TIMEZONE ?? baseConfig.app.timezone,
       confidenceThreshold: Number(process.env.PARSER_CONFIDENCE_THRESHOLD ?? baseConfig.app.confidenceThreshold),
       rateLimit: Number(process.env.REQUEST_RATE_LIMIT ?? baseConfig.app.rateLimit),
-      rateWindowSeconds: Number(process.env.REQUEST_RATE_WINDOW_SECONDS ?? baseConfig.app.rateWindowSeconds)
+      rateWindowSeconds: Number(process.env.REQUEST_RATE_WINDOW_SECONDS ?? baseConfig.app.rateWindowSeconds),
+      recoveryEnabled: parseBoolean(process.env.REQUEST_RECOVERY_ENABLED, baseConfig.app.recoveryEnabled),
+      recoveryPollMs: Number(process.env.REQUEST_RECOVERY_POLL_MS ?? baseConfig.app.recoveryPollMs),
+      recoveryGraceSeconds: Number(process.env.REQUEST_RECOVERY_GRACE_SECONDS ?? baseConfig.app.recoveryGraceSeconds),
+      recoveryBatchSize: Number(process.env.REQUEST_RECOVERY_BATCH_SIZE ?? baseConfig.app.recoveryBatchSize)
     },
     database: {
       path: absolutePath(process.env.DATABASE_PATH ?? baseConfig.database.path, projectRoot)

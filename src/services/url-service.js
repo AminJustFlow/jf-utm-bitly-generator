@@ -19,18 +19,17 @@ export class UrlService {
       parsed.searchParams.delete(key);
     }
 
-    for (const [key, value] of Object.entries(utmParams)) {
-      if (value !== undefined && value !== null && (value !== "" || UTM_KEYS.includes(key))) {
-        parsed.searchParams.set(key, value);
-      }
-    }
+    const existingEntries = [...parsed.searchParams.entries()];
+    const utmEntries = UTM_KEYS
+      .filter((key) => utmParams[key] !== undefined && utmParams[key] !== null)
+      .map((key) => [key, String(utmParams[key])]);
 
-    parsed.search = buildSortedSearch(parsed.searchParams);
+    parsed.search = buildSearch([...existingEntries, ...utmEntries]);
     return parsed.toString();
   }
 }
 
-const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
+const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"];
 
 function buildSortedSearch(searchParams) {
   const entries = [...searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) => {
@@ -38,5 +37,9 @@ function buildSortedSearch(searchParams) {
     return keyCompare !== 0 ? keyCompare : leftValue.localeCompare(rightValue);
   });
 
+  return buildSearch(entries);
+}
+
+function buildSearch(entries) {
   return entries.length > 0 ? `?${new URLSearchParams(entries).toString()}` : "";
 }

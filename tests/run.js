@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import rules from "../config/rules.js";
 import { HealthController } from "../src/controllers/health-controller.js";
 import { UtmLibraryController } from "../src/controllers/utm-library-controller.js";
+import { UtmBuilderController } from "../src/controllers/utm-builder-controller.js";
+import { UtmImportController } from "../src/controllers/utm-import-controller.js";
 import { RulesService } from "../src/services/rules-service.js";
 import { UrlService } from "../src/services/url-service.js";
 import { FingerprintService } from "../src/services/fingerprint-service.js";
@@ -20,6 +22,11 @@ import { LinkWorkflowService } from "../src/services/link-workflow-service.js";
 import { MessageFormatter } from "../src/services/message-formatter.js";
 import { UtmLibraryEditorService } from "../src/services/utm-library-editor-service.js";
 import { BasicAuthService } from "../src/services/basic-auth-service.js";
+import { ClickUpChatService } from "../src/services/clickup-chat-service.js";
+import { RateLimiter } from "../src/services/rate-limiter.js";
+import { ReceivedRequestRecoveryService } from "../src/services/received-request-recovery-service.js";
+import { TrackerImportService } from "../src/services/tracker-import-service.js";
+import { XlsxWorkbookReader } from "../src/services/xlsx-workbook-reader.js";
 import { ClickUpWebhookController } from "../src/controllers/clickup-webhook-controller.js";
 import { GeneratedLinkRepository } from "../src/repositories/generated-link-repository.js";
 import { RequestRepository } from "../src/repositories/request-repository.js";
@@ -84,7 +91,7 @@ const tests = [
 
       assert.equal(
         result,
-        "https://studleys.com/perennials?color=red&utm_campaign=SpringSale&utm_content=PlantFinder&utm_medium=Social&utm_source=Instagram&utm_term="
+        "https://studleys.com/perennials?color=red&utm_source=Instagram&utm_medium=Social&utm_campaign=SpringSale&utm_term=&utm_content=PlantFinder"
       );
     }
   },
@@ -364,7 +371,7 @@ const tests = [
 
       assert.equal(messages.length, 1);
       assert.match(messages[0].message, /Bitly quota was reached/iu);
-      assert.match(messages[0].message, /https:\/\/studleys\.com\/garden-plants\/\?utm_campaign=spring_sale/iu);
+      assert.match(messages[0].message, /https:\/\/studleys\.com\/garden-plants\/\?utm_source=Facebook&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=/iu);
       assert.equal(updates.at(-1).fields.status, "completed_without_short_link");
       assert.equal(updates.at(-1).fields.error_code, "bitly_quota_reached");
     }
@@ -594,6 +601,123 @@ const tests = [
     }
   },
   {
+    name: "rate limiter blocks exactly at the configured limit",
+    run() {
+      const limiter = new RateLimiter({
+        countRecentByActorChannel() {
+          return 20;
+        }
+      }, 20, 300);
+
+      assert.equal(limiter.allows({
+        userId: "user-1",
+        channelId: "channel-1"
+      }), false);
+    }
+  },
+  {
+    name: "clickup chat service does not retry message posts automatically",
+    async run() {
+      const calls = [];
+      const service = new ClickUpChatService({
+        async request(method, url, options) {
+          calls.push({ method, url, options });
+          return {
+            statusCode: 200,
+            json() {
+              return { id: "message-1" };
+            }
+          };
+        }
+      }, {
+        apiToken: "pk_test",
+        workspaceId: "901234",
+        apiBase: "https://api.clickup.com/api/v3",
+        messageContentField: "content",
+        messageFallbackField: "text_content",
+        timeoutMs: 8000
+      });
+
+      const response = await service.postMessage("456789", "Hello world");
+
+      assert.equal(response.id, "message-1");
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].options.retries, 0);
+    }
+  },
+  {
+    name: "received request recovery service processes stale received requests only",
+    async run() {
+      const database = new DatabaseSync(":memory:");
+      database.exec(fs.readFileSync(new URL("../database/migrations/001_init.sql", import.meta.url), "utf8"));
+      const requestRepository = new RequestRepository(database);
+      const processed = [];
+      const staleTimestamp = "2026-03-16T11:00:00.000Z";
+      const freshTimestamp = new Date().toISOString();
+      const staleRequestId = requestRepository.createIncoming({
+        requestUuid: "recovery-stale",
+        deliveryKey: "recovery-stale",
+        status: "received",
+        originalMessage: "Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/",
+        rawPayload: {
+          workspace_id: "901234"
+        },
+        clickupWorkspaceId: "901234",
+        clickupChannelId: "456789",
+        clickupMessageId: "msg-stale",
+        createdAt: staleTimestamp,
+        updatedAt: staleTimestamp
+      });
+      const freshRequestId = requestRepository.createIncoming({
+        requestUuid: "recovery-fresh",
+        deliveryKey: "recovery-fresh",
+        status: "received",
+        originalMessage: "Need a Facebook link for Studleys spring sale to https://studleys.com/perennials/",
+        rawPayload: {
+          workspace_id: "901234"
+        },
+        clickupWorkspaceId: "901234",
+        clickupChannelId: "456789",
+        clickupMessageId: "msg-fresh",
+        createdAt: freshTimestamp,
+        updatedAt: freshTimestamp
+      });
+
+      const recoveryService = new ReceivedRequestRecoveryService({
+        requestRepository,
+        auditLogRepository: {
+          log() {}
+        },
+        workflowService: {
+          async process(requestId, event, context) {
+            processed.push({ requestId, event, context });
+            requestRepository.update(requestId, {
+              status: "completed"
+            });
+          }
+        },
+        logger: nullLogger,
+        enabled: true,
+        intervalMs: 30000,
+        graceSeconds: 30,
+        batchSize: 10
+      });
+
+      await recoveryService.recoverPending();
+
+      assert.equal(processed.length, 1);
+      assert.equal(processed[0].requestId, staleRequestId);
+      assert.equal(processed[0].event.deliveryKey, "recovery-stale");
+      assert.equal(processed[0].event.channelId, "456789");
+      assert.match(processed[0].context.correlationId, /^recovery-/u);
+
+      const staleRow = database.prepare("SELECT status FROM requests WHERE id = ?").get(staleRequestId);
+      const freshRow = database.prepare("SELECT status FROM requests WHERE id = ?").get(freshRequestId);
+      assert.equal(staleRow.status, "completed");
+      assert.equal(freshRow.status, "received");
+    }
+  },
+  {
     name: "utm library service lists unique tracked links with request counts",
     run() {
       const database = new DatabaseSync(":memory:");
@@ -738,6 +862,7 @@ const tests = [
         requestRepository,
         requestNormalizer: normalizer,
         fingerprintService,
+        generatedLinkRepository,
         linkGenerationService: new LinkGenerationService({
           generatedLinkRepository,
           bitlyService: {
@@ -812,6 +937,606 @@ const tests = [
       assert.equal(requestRow.status, "completed");
       assert.equal(requestRow.qr_url, "qr:https://bit.ly/existing");
       assert.equal(requestRow.reused_existing, 1);
+    }
+  },
+  {
+    name: "utm library editor deletes one deduped library entry and orphaned cached link",
+    async run() {
+      const database = new DatabaseSync(":memory:");
+      database.exec(fs.readFileSync(new URL("../database/migrations/001_init.sql", import.meta.url), "utf8"));
+      const requestRepository = new RequestRepository(database);
+      const generatedLinkRepository = new GeneratedLinkRepository(database);
+      const editorService = new UtmLibraryEditorService({
+        requestRepository,
+        requestNormalizer: normalizer,
+        fingerprintService,
+        generatedLinkRepository,
+        linkGenerationService: {
+          async generate() {
+            throw new Error("generate should not be called while deleting");
+          }
+        }
+      });
+
+      const deletedDecision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "studleys",
+        channel: "linkedin",
+        campaign_label: "spring sale",
+        destination_url: "https://studleys.com/garden-plants/",
+        needs_qr: false,
+        confidence: 1
+      }));
+      const keptDecision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "castle",
+        channel: "website",
+        campaign_label: "winter lunch",
+        destination_url: "https://www.castleintheclouds.org/calendar-of-events/category/winter-lunch/",
+        needs_qr: false,
+        confidence: 1
+      }));
+      assert.equal(deletedDecision.status, "ready");
+      assert.equal(keptDecision.status, "ready");
+
+      const deletedNormalized = deletedDecision.normalizedRequest;
+      const keptNormalized = keptDecision.normalizedRequest;
+      const deletedFingerprint = fingerprintService.generate(deletedNormalized);
+      const keptFingerprint = fingerprintService.generate(keptNormalized);
+      const timestamp = "2026-03-16T15:00:00.000Z";
+
+      generatedLinkRepository.create({
+        fingerprint: deletedFingerprint,
+        client: deletedNormalized.client,
+        channel: deletedNormalized.channel,
+        assetType: deletedNormalized.assetType,
+        normalizedDestinationUrl: deletedNormalized.normalizedDestinationUrl,
+        canonicalCampaign: deletedNormalized.canonicalCampaign,
+        finalLongUrl: deletedNormalized.finalLongUrl,
+        shortUrl: "https://bit.ly/delete-me",
+        qrUrl: "qr:https://bit.ly/delete-me",
+        bitlyId: "bitly-delete",
+        bitlyPayload: { link: "https://bit.ly/delete-me" },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+      generatedLinkRepository.create({
+        fingerprint: keptFingerprint,
+        client: keptNormalized.client,
+        channel: keptNormalized.channel,
+        assetType: keptNormalized.assetType,
+        normalizedDestinationUrl: keptNormalized.normalizedDestinationUrl,
+        canonicalCampaign: keptNormalized.canonicalCampaign,
+        finalLongUrl: keptNormalized.finalLongUrl,
+        shortUrl: "https://bit.ly/keep-me",
+        qrUrl: null,
+        bitlyId: "bitly-keep",
+        bitlyPayload: { link: "https://bit.ly/keep-me" },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+
+      const deletedRequestOne = requestRepository.createIncoming({
+        requestUuid: "delete-1",
+        deliveryKey: "delete-1",
+        status: "received",
+        originalMessage: "Delete request 1",
+        rawPayload: {},
+        sourceUserId: "tester",
+        sourceUserName: "Tester",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+      requestRepository.update(deletedRequestOne, {
+        status: "completed",
+        fingerprint: deletedFingerprint,
+        final_long_url: deletedNormalized.finalLongUrl,
+        normalized_payload: deletedNormalized.toJSON(),
+        short_url: "https://bit.ly/delete-me",
+        qr_url: "qr:https://bit.ly/delete-me"
+      });
+
+      const deletedRequestTwo = requestRepository.createIncoming({
+        requestUuid: "delete-2",
+        deliveryKey: "delete-2",
+        status: "received",
+        originalMessage: "Delete request 2",
+        rawPayload: {},
+        sourceUserId: "tester",
+        sourceUserName: "Tester",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+      requestRepository.update(deletedRequestTwo, {
+        status: "completed",
+        fingerprint: deletedFingerprint,
+        final_long_url: deletedNormalized.finalLongUrl,
+        normalized_payload: deletedNormalized.toJSON(),
+        short_url: "https://bit.ly/delete-me",
+        qr_url: "qr:https://bit.ly/delete-me"
+      });
+
+      const keptRequest = requestRepository.createIncoming({
+        requestUuid: "keep-1",
+        deliveryKey: "keep-1",
+        status: "received",
+        originalMessage: "Keep request",
+        rawPayload: {},
+        sourceUserId: "tester",
+        sourceUserName: "Tester",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+      requestRepository.update(keptRequest, {
+        status: "completed",
+        fingerprint: keptFingerprint,
+        final_long_url: keptNormalized.finalLongUrl,
+        normalized_payload: keptNormalized.toJSON(),
+        short_url: "https://bit.ly/keep-me"
+      });
+
+      const result = await editorService.deleteEntry({
+        request_id: deletedRequestTwo
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.deletedRequests, 2);
+      assert.equal(requestRepository.findById(deletedRequestOne), null);
+      assert.equal(requestRepository.findById(deletedRequestTwo), null);
+      assert.ok(requestRepository.findById(keptRequest));
+      assert.equal(generatedLinkRepository.findByFingerprint(deletedFingerprint), null);
+      assert.ok(generatedLinkRepository.findByFingerprint(keptFingerprint));
+    }
+  },
+  {
+    name: "tracker import service imports workbook rows into requests and generated links",
+    run() {
+      const database = new DatabaseSync(":memory:");
+      database.exec(fs.readFileSync(new URL("../database/migrations/001_init.sql", import.meta.url), "utf8"));
+      const requestRepository = new RequestRepository(database);
+      const generatedLinkRepository = new GeneratedLinkRepository(database);
+      const libraryService = new UtmLibraryService(requestRepository);
+      const trackerImportService = new TrackerImportService({
+        workbookReader: new XlsxWorkbookReader(),
+        requestRepository,
+        generatedLinkRepository,
+        rulesService,
+        fingerprintService,
+        urlService,
+        qrCodeService: {
+          generateUrl(url) {
+            return `qr:${url}`;
+          }
+        }
+      });
+      const workbookBase64 = buildWorkbookFixtureBase64({
+        sheets: [
+          {
+            name: "SFG",
+            rows: [
+              buildTrackerHeaderRow(),
+              [
+                "260109.0",
+                "https://studleys.com/perennials?color=red",
+                "LinkedIn",
+                "Social",
+                "spring_sale",
+                "",
+                "Contact",
+                "https://studleys.com/perennials/?utm_source=bad",
+                "https://bit.ly/imported1",
+                "SFG"
+              ]
+            ]
+          },
+          {
+            name: "PracticeTab",
+            rows: [
+              buildTrackerHeaderRow(),
+              [
+                "260109.0",
+                "https://example.com/practice",
+                "LinkedIn",
+                "Social",
+                "practice_campaign",
+                "",
+                "",
+                "",
+                "https://bit.ly/practice",
+                "SFG"
+              ]
+            ]
+          }
+        ]
+      });
+
+      const firstImport = trackerImportService.importFiles([{
+        name: "260109-JF-UTM-Tracker.xlsx",
+        content_base64: workbookBase64
+      }]);
+
+      assert.equal(firstImport.summary.attempted, 1);
+      assert.equal(firstImport.summary.imported, 1);
+      assert.equal(firstImport.summary.skipped, 0);
+      assert.equal(firstImport.summary.errors, 0);
+      assert.equal(firstImport.files[0].sheets[0].name, "SFG");
+
+      const row = database.prepare(`
+        SELECT id, status, fingerprint, final_long_url, short_url, source_user_id, created_at
+        FROM requests
+        WHERE delivery_key LIKE 'import:%'
+        LIMIT 1
+      `).get();
+
+      assert.equal(row.status, "completed");
+      assert.equal(row.short_url, "https://bit.ly/imported1");
+      assert.equal(row.source_user_id, "xlsx_import");
+      assert.equal(row.created_at, "2026-01-09T12:00:00.000Z");
+      assert.equal(
+        row.final_long_url,
+        "https://studleys.com/perennials?color=red&utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=Contact"
+      );
+
+      const requestPayload = JSON.parse(database.prepare("SELECT normalized_payload FROM requests WHERE id = ?").get(row.id).normalized_payload);
+      assert.equal(requestPayload.client, "studleys");
+      assert.equal(requestPayload.channel, "linkedin");
+      assert.equal(requestPayload.utm_content, "Contact");
+
+      const generatedRow = generatedLinkRepository.findByFingerprint(row.fingerprint);
+      assert.ok(generatedRow);
+      assert.equal(generatedRow.short_url, "https://bit.ly/imported1");
+      assert.equal(generatedRow.final_long_url, row.final_long_url);
+
+      const library = libraryService.list({});
+      assert.equal(library.summary.totalUniqueLinks, 1);
+      assert.equal(library.items[0].client, "studleys");
+      assert.equal(library.items[0].utmSource, "LinkedIn");
+      assert.equal(library.items[0].utmContent, "Contact");
+
+      const secondImport = trackerImportService.importFiles([{
+        name: "260109-JF-UTM-Tracker.xlsx",
+        content_base64: workbookBase64
+      }]);
+
+      assert.equal(secondImport.summary.attempted, 1);
+      assert.equal(secondImport.summary.imported, 0);
+      assert.equal(secondImport.summary.skipped, 1);
+      assert.equal(secondImport.summary.errors, 0);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM requests").get().count, 1);
+    }
+  },
+  {
+    name: "tracker import service skips duplicate workbook links and backfills missing short links",
+    run() {
+      const database = new DatabaseSync(":memory:");
+      database.exec(fs.readFileSync(new URL("../database/migrations/001_init.sql", import.meta.url), "utf8"));
+      const requestRepository = new RequestRepository(database);
+      const generatedLinkRepository = new GeneratedLinkRepository(database);
+      const trackerImportService = new TrackerImportService({
+        workbookReader: new XlsxWorkbookReader(),
+        requestRepository,
+        generatedLinkRepository,
+        rulesService,
+        fingerprintService,
+        urlService,
+        qrCodeService: {
+          generateUrl(url) {
+            return `qr:${url}`;
+          }
+        }
+      });
+      const workbookBase64 = buildWorkbookFixtureBase64({
+        sheets: [{
+          name: "SFG",
+          rows: [
+            buildTrackerHeaderRow(),
+            [
+              "260109.0",
+              "https://studleys.com/perennials",
+              "LinkedIn",
+              "Social",
+              "spring_sale",
+              "",
+              "Contact",
+              "",
+              "",
+              "SFG"
+            ],
+            [
+              "260110.0",
+              "https://studleys.com/perennials",
+              "LinkedIn",
+              "Social",
+              "spring_sale",
+              "",
+              "Contact",
+              "",
+              "https://bit.ly/imported-dupe",
+              "SFG"
+            ]
+          ]
+        }]
+      });
+
+      const result = trackerImportService.importFiles([{
+        name: "dedupe.xlsx",
+        content_base64: workbookBase64
+      }]);
+
+      assert.equal(result.summary.attempted, 2);
+      assert.equal(result.summary.imported, 1);
+      assert.equal(result.summary.skipped, 1);
+      assert.equal(result.summary.errors, 0);
+
+      const requestRow = database.prepare(`
+        SELECT status, short_url, qr_url
+        FROM requests
+        WHERE delivery_key LIKE 'import:%'
+        LIMIT 1
+      `).get();
+      assert.equal(requestRow.status, "completed");
+      assert.equal(requestRow.short_url, "https://bit.ly/imported-dupe");
+      assert.equal(requestRow.qr_url, null);
+
+      const generatedCount = database.prepare("SELECT COUNT(*) AS count FROM generated_links").get().count;
+      assert.equal(generatedCount, 1);
+      const generatedRow = database.prepare("SELECT short_url FROM generated_links LIMIT 1").get();
+      assert.equal(generatedRow.short_url, "https://bit.ly/imported-dupe");
+    }
+  },
+  {
+    name: "tracker import service resets imported requests and unreferenced import-seeded links",
+    run() {
+      const database = new DatabaseSync(":memory:");
+      database.exec(fs.readFileSync(new URL("../database/migrations/001_init.sql", import.meta.url), "utf8"));
+      const requestRepository = new RequestRepository(database);
+      const generatedLinkRepository = new GeneratedLinkRepository(database);
+      const trackerImportService = new TrackerImportService({
+        workbookReader: new XlsxWorkbookReader(),
+        requestRepository,
+        generatedLinkRepository,
+        rulesService,
+        fingerprintService,
+        urlService,
+        qrCodeService: {
+          generateUrl(url) {
+            return `qr:${url}`;
+          }
+        }
+      });
+
+      const importedDecision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "studleys",
+        channel: "linkedin",
+        asset_type: "social",
+        campaign_label: "spring sale",
+        utm_source: "LinkedIn",
+        utm_medium: "Social",
+        utm_campaign: "spring_sale",
+        utm_term: "",
+        utm_content: "Contact",
+        destination_url: "https://studleys.com/perennials",
+        needs_qr: false,
+        confidence: 1,
+        warnings: [],
+        missing_fields: []
+      }));
+      assert.equal(importedDecision.status, "ready");
+      const imported = importedDecision.normalizedRequest;
+      const importedFingerprint = fingerprintService.generate(imported);
+      const importedRequestId = requestRepository.createIncoming({
+        requestUuid: "import-reset-1",
+        deliveryKey: "import:1",
+        status: "completed",
+        originalMessage: "Imported row 1",
+        rawPayload: { source: "xlsx_import" },
+        sourceUserId: "xlsx_import",
+        sourceUserName: "XLSX Import",
+        createdAt: "2026-03-10T12:00:00.000Z",
+        updatedAt: "2026-03-10T12:00:00.000Z"
+      });
+      requestRepository.update(importedRequestId, {
+        fingerprint: importedFingerprint,
+        normalized_payload: imported.toJSON(),
+        final_long_url: imported.finalLongUrl,
+        short_url: "https://bit.ly/import-reset"
+      });
+      generatedLinkRepository.create({
+        fingerprint: importedFingerprint,
+        client: imported.client,
+        channel: imported.channel,
+        assetType: imported.assetType,
+        normalizedDestinationUrl: imported.normalizedDestinationUrl,
+        canonicalCampaign: imported.canonicalCampaign,
+        finalLongUrl: imported.finalLongUrl,
+        shortUrl: "https://bit.ly/import-reset",
+        qrUrl: null,
+        bitlyId: null,
+        bitlyPayload: { imported: true },
+        createdAt: "2026-03-10T12:00:00.000Z",
+        updatedAt: "2026-03-10T12:00:00.000Z"
+      });
+
+      const sharedDecision = normalizer.normalize(ParsedLinkRequest.fromObject({
+        client: "studleys",
+        channel: "facebook",
+        asset_type: "social",
+        campaign_label: "spring sale",
+        utm_source: "Facebook",
+        utm_medium: "Social",
+        utm_campaign: "spring_sale",
+        utm_term: "",
+        utm_content: "",
+        destination_url: "https://studleys.com/garden-plants/",
+        needs_qr: false,
+        confidence: 1,
+        warnings: [],
+        missing_fields: []
+      }));
+      assert.equal(sharedDecision.status, "ready");
+      const shared = sharedDecision.normalizedRequest;
+      const sharedFingerprint = fingerprintService.generate(shared);
+      const sharedImportedRequestId = requestRepository.createIncoming({
+        requestUuid: "import-reset-2",
+        deliveryKey: "import:2",
+        status: "completed",
+        originalMessage: "Imported row 2",
+        rawPayload: { source: "xlsx_import" },
+        sourceUserId: "xlsx_import",
+        sourceUserName: "XLSX Import",
+        createdAt: "2026-03-10T12:05:00.000Z",
+        updatedAt: "2026-03-10T12:05:00.000Z"
+      });
+      requestRepository.update(sharedImportedRequestId, {
+        fingerprint: sharedFingerprint,
+        normalized_payload: shared.toJSON(),
+        final_long_url: shared.finalLongUrl,
+        short_url: "https://bit.ly/shared-reset"
+      });
+      const manualSharedRequestId = requestRepository.createIncoming({
+        requestUuid: "manual-shared-1",
+        deliveryKey: "manual:1",
+        status: "completed",
+        originalMessage: "Manual row",
+        rawPayload: {},
+        sourceUserId: "user-1",
+        createdAt: "2026-03-10T12:06:00.000Z",
+        updatedAt: "2026-03-10T12:06:00.000Z"
+      });
+      requestRepository.update(manualSharedRequestId, {
+        fingerprint: sharedFingerprint,
+        normalized_payload: shared.toJSON(),
+        final_long_url: shared.finalLongUrl,
+        short_url: "https://bit.ly/shared-reset"
+      });
+      generatedLinkRepository.create({
+        fingerprint: sharedFingerprint,
+        client: shared.client,
+        channel: shared.channel,
+        assetType: shared.assetType,
+        normalizedDestinationUrl: shared.normalizedDestinationUrl,
+        canonicalCampaign: shared.canonicalCampaign,
+        finalLongUrl: shared.finalLongUrl,
+        shortUrl: "https://bit.ly/shared-reset",
+        qrUrl: null,
+        bitlyId: null,
+        bitlyPayload: { imported: true },
+        createdAt: "2026-03-10T12:05:00.000Z",
+        updatedAt: "2026-03-10T12:05:00.000Z"
+      });
+
+      assert.deepEqual(trackerImportService.getImportInventory(), {
+        importedRequests: 2,
+        importedGeneratedLinks: 2
+      });
+
+      const reset = trackerImportService.resetImports();
+      assert.deepEqual(reset, {
+        deletedRequests: 2,
+        deletedGeneratedLinks: 1
+      });
+      assert.deepEqual(trackerImportService.getImportInventory(), {
+        importedRequests: 0,
+        importedGeneratedLinks: 1
+      });
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM requests").get().count, 1);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM generated_links").get().count, 1);
+      assert.equal(generatedLinkRepository.findByFingerprint(importedFingerprint), null);
+      assert.ok(generatedLinkRepository.findByFingerprint(sharedFingerprint));
+    }
+  },
+  {
+    name: "utm import controller renders html and validates uploads",
+    async run() {
+      const controller = new UtmImportController({
+        trackerImportService: {
+          getImportInventory() {
+            return {
+              importedRequests: 7,
+              importedGeneratedLinks: 3
+            };
+          },
+          importFiles(files) {
+            assert.equal(files.length, 1);
+            assert.equal(files[0].name, "tracker.xlsx");
+            return {
+              files: [{
+                fileName: "tracker.xlsx",
+                ok: true,
+                message: "Imported 1 row(s) from tracker.xlsx.",
+                summary: {
+                  attempted: 1,
+                  imported: 1,
+                  skipped: 0,
+                  errors: 0
+                },
+                sheets: [{
+                  name: "SFG",
+                  attempted: 1,
+                  imported: 1,
+                  skipped: 0,
+                  errors: 0
+                }]
+              }],
+              summary: {
+                attempted: 1,
+                imported: 1,
+                skipped: 0,
+                errors: 0
+              }
+            };
+          },
+          resetImports() {
+            return {
+              deletedRequests: 7,
+              deletedGeneratedLinks: 3
+            };
+          }
+        }
+      });
+
+      const htmlResponse = await controller.handleHtml();
+      const errorResponse = await controller.handleImport({
+        parseJson() {
+          return {
+            ok: true,
+            value: {}
+          };
+        }
+      });
+      const importResponse = await controller.handleImport({
+        parseJson() {
+          return {
+            ok: true,
+            value: {
+              files: [{
+                name: "tracker.xlsx",
+                content_base64: "ZmFrZQ=="
+              }]
+            }
+          };
+        }
+      });
+      const resetResponse = await controller.handleReset();
+
+      assert.equal(htmlResponse.statusCode, 200);
+      assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
+      assert.match(htmlResponse.body, /Import UTM Trackers/iu);
+      assert.match(htmlResponse.body, /JF UTM Console/iu);
+      assert.match(htmlResponse.body, /Import Selected Files/iu);
+      assert.match(htmlResponse.body, /UTM Library/iu);
+      assert.match(htmlResponse.body, /Create UTM/iu);
+      assert.match(htmlResponse.body, /aria-current="page">Import Trackers/iu);
+      assert.match(htmlResponse.body, /Reset Imported UTMs/iu);
+      assert.match(htmlResponse.body, />7</u);
+
+      assert.equal(errorResponse.statusCode, 422);
+      assert.match(errorResponse.body, /missing_files/iu);
+
+      assert.equal(importResponse.statusCode, 200);
+      assert.match(importResponse.body, /Imported 1 row/iu);
+      assert.match(importResponse.body, /"status":"ok"/iu);
+      assert.equal(resetResponse.statusCode, 200);
+      assert.match(resetResponse.body, /"deletedRequests":7/iu);
+      assert.match(resetResponse.body, /"deletedGeneratedLinks":3/iu);
     }
   },
   {
@@ -902,14 +1627,21 @@ const tests = [
                 reusedExisting: false
               }
             };
+          },
+          async deleteEntry(input) {
+            assert.equal(input.request_id, 12);
+            return {
+              ok: true,
+              deletedRequests: 3
+            };
           }
         },
         rulesService: {
           clients() {
             return ["studleys"];
           },
-          channels() {
-            return ["linkedin"];
+          createChannelCatalog() {
+            return [{ key: "linkedin" }];
           }
         }
       });
@@ -931,22 +1663,138 @@ const tests = [
           };
         }
       });
+      const deleteResponse = await controller.handleDelete({
+        parseJson() {
+          return {
+            ok: true,
+            value: {
+              request_id: 12
+            }
+          };
+        }
+      });
 
       assert.equal(htmlResponse.statusCode, 200);
       assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
       assert.match(htmlResponse.body, /UTM Library/iu);
+      assert.match(htmlResponse.body, /JF UTM Console/iu);
       assert.match(htmlResponse.body, /spring_sale/iu);
       assert.match(htmlResponse.body, /QR Preview/iu);
       assert.match(htmlResponse.body, /create-qr-code/iu);
       assert.match(htmlResponse.body, /Edit and regenerate/iu);
       assert.match(htmlResponse.body, /Short Link/iu);
+      assert.match(htmlResponse.body, /aria-current="page">UTM Library/iu);
+      assert.match(htmlResponse.body, /Import Trackers/iu);
       assert.match(htmlResponse.body, /data-regenerate-form/iu);
+      assert.match(htmlResponse.body, /Delete Entry/iu);
+      assert.match(htmlResponse.body, /\/utms\/delete/iu);
       assert.equal(csvResponse.statusCode, 200);
       assert.match(csvResponse.headers["Content-Type"], /text\/csv/iu);
       assert.match(csvResponse.body, /request_id,status,client/i);
       assert.match(csvResponse.body, /Studleys/i);
       assert.equal(regenerateResponse.statusCode, 200);
       assert.match(regenerateResponse.body, /highlight_request_id=22/iu);
+      assert.equal(deleteResponse.statusCode, 200);
+      assert.match(deleteResponse.body, /"deleted_requests":3/iu);
+      assert.match(deleteResponse.body, /toast=UTM\+entry\+removed/iu);
+    }
+  },
+  {
+    name: "utm builder controller renders html and creates tracked links",
+    async run() {
+      const controller = new UtmBuilderController({
+        utmLibraryEditorService: {
+          async create(input) {
+            assert.equal(input.client, "studleys");
+            return {
+              ok: true,
+              requestId: 31,
+              status: "completed_without_short_link",
+              normalized: {
+                client: "studleys",
+                clientDisplayName: "Studleys",
+                channel: "linkedin",
+                channelDisplayName: "LinkedIn",
+                destinationUrl: "https://studleys.com/garden-plants/",
+                finalLongUrl: "https://studleys.com/garden-plants/?utm_source=LinkedIn&utm_medium=Social&utm_campaign=spring_sale&utm_term=&utm_content=",
+                utmSource: "LinkedIn",
+                utmMedium: "Social",
+                utmCampaign: "spring_sale",
+                utmTerm: "",
+                utmContent: "",
+                warnings: ["Bitly monthly quota was reached, so no short link was created."]
+              },
+              result: {
+                shortUrl: null,
+                qrUrl: "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=https%3A%2F%2Fstudleys.com",
+                reusedExisting: false
+              }
+            };
+          }
+        },
+        rulesService: {
+          createFormCatalog() {
+            return [{
+              key: "studleys",
+              displayName: "Studleys",
+              taxonomy: {
+                sources: ["Facebook", "LinkedIn"],
+                mediums: ["Social"],
+                campaigns: ["spring_sale"],
+                terms: [""],
+                contents: ["Contact"],
+                combinations: [{ source: "LinkedIn", medium: "Social", campaign: "spring_sale", term: "", content: "Contact" }]
+              }
+            }];
+          },
+          createChannelCatalog() {
+            return [{
+              key: "linkedin",
+              displayName: "LinkedIn",
+              assetType: "social",
+              requiresQr: false,
+              utmDefaults: {
+                source: "LinkedIn",
+                medium: "Social"
+              }
+            }];
+          }
+        }
+      });
+
+      const htmlResponse = await controller.handleHtml({});
+      const createResponse = await controller.handleCreate({
+        parseJson() {
+          return {
+            ok: true,
+            value: {
+              client: "studleys",
+              destination_url: "https://studleys.com/garden-plants/"
+            }
+          };
+        }
+      });
+
+      assert.equal(htmlResponse.statusCode, 200);
+      assert.match(htmlResponse.headers["Content-Type"], /text\/html/iu);
+      assert.match(htmlResponse.body, /Create UTM/iu);
+      assert.match(htmlResponse.body, /JF UTM Console/iu);
+      assert.match(htmlResponse.body, /UTM Library/iu);
+      assert.match(htmlResponse.body, /aria-current="page">Create UTM/iu);
+      assert.match(htmlResponse.body, /Import Trackers/iu);
+      assert.match(htmlResponse.body, /campaign_label/iu);
+      assert.match(htmlResponse.body, /Matching setups/iu);
+      assert.match(htmlResponse.body, /data-combo-field="source"/iu);
+      assert.match(htmlResponse.body, /utm_source_custom/iu);
+      assert.match(htmlResponse.body, /Custom overrides/iu);
+      assert.equal(createResponse.statusCode, 200);
+      const payload = JSON.parse(createResponse.body);
+      assert.equal(payload.status, "ok");
+      assert.equal(payload.request_id, 31);
+      assert.match(payload.library_url, /highlight_request_id=31/iu);
+      assert.equal(payload.result.status, "completed_without_short_link");
+      assert.equal(payload.result.utm_source, "LinkedIn");
+      assert.equal(payload.result.qr_url.includes("create-qr-code"), true);
     }
   },
   {
@@ -1072,6 +1920,68 @@ const tests = [
     }
   },
   {
+    name: "health controller warns when library auth uses preview credentials",
+    async run() {
+      const tempRoot = fs.mkdtempSync(path.join(process.cwd(), "storage", "health-test-"));
+      const controller = new HealthController({
+        database: {
+          prepare() {
+            return {
+              get() {
+                return { ok: 1 };
+              }
+            };
+          }
+        },
+        config: {
+          app: {
+            env: "production",
+            debug: false
+          },
+          database: {
+            path: path.join(tempRoot, "app.sqlite")
+          },
+          logging: {
+            path: path.join(tempRoot, "app.log")
+          },
+          openai: {
+            apiKey: "sk-test",
+            model: "gpt-4.1-mini"
+          },
+          clickup: {
+            apiToken: "pk_test",
+            workspaceId: "901234",
+            allowedChannelIds: ["456789"],
+            webhookSecret: "secret",
+            debugWebhook: false,
+            debugSkipSignature: false,
+            debugSkipChannelCheck: false,
+            debugSkipWorkspaceCheck: false
+          },
+          bitly: {
+            accessToken: "bitly-token"
+          },
+          libraryAuth: {
+            enabled: true,
+            username: "justflow",
+            password: "preview"
+          }
+        }
+      });
+
+      try {
+        const response = await controller.handle();
+        const body = JSON.parse(response.body);
+
+        assert.equal(response.statusCode, 200);
+        assert.equal(body.status, "warning");
+        assert.ok(body.warnings.some((issue) => issue.code === "library_auth_default_credentials"));
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    }
+  },
+  {
     name: "unsupported client or channel handling",
     run() {
       const decision = normalizer.normalize(ParsedLinkRequest.fromObject({
@@ -1151,6 +2061,34 @@ const tests = [
     }
   },
   {
+    name: "clickup payload mapper uses payload hash fallback when ids are missing",
+    run() {
+      const firstPayload = {
+        payload: {
+          workspace_id: "901234",
+          channel_id: "456789",
+          text_content: "Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/",
+          sent_at: "2026-03-16T12:00:00Z"
+        }
+      };
+      const secondPayload = {
+        payload: {
+          workspace_id: "901234",
+          channel_id: "456789",
+          text_content: "Need a LinkedIn link for Studleys spring sale to https://studleys.com/garden-plants/",
+          sent_at: "2026-03-16T12:01:00Z"
+        }
+      };
+
+      const first = payloadMapper.map(firstPayload, { correlationId: "test-correlation" });
+      const second = payloadMapper.map(secondPayload, { correlationId: "test-correlation" });
+
+      assert.notEqual(first.event.deliveryKey, second.event.deliveryKey);
+      assert.match(first.event.deliveryKey, /^456789:/u);
+      assert.match(second.event.deliveryKey, /^456789:/u);
+    }
+  },
+  {
     name: "clickup test webhook fixture fails with explicit missing message code",
     run() {
       const payload = JSON.parse(fs.readFileSync(new URL("./fixtures/clickup-test-webhook.json", import.meta.url), "utf8"));
@@ -1214,6 +2152,155 @@ const tests = [
     }
   }
 ];
+
+function buildTrackerHeaderRow() {
+  return [
+    "Date",
+    "Destination URL",
+    "Source",
+    "Medium",
+    "Campaign Name/Promotion or Campaign",
+    "Campaign Term / Keywords / Running Shoes",
+    "Campaign Content / A/B Test / To same URL",
+    "UTM String",
+    "Bit.ly",
+    "Client Code"
+  ];
+}
+
+function buildWorkbookFixtureBase64({ sheets }) {
+  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    ${sheets.map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}
+  </sheets>
+</workbook>`;
+  const relationshipsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}
+</Relationships>`;
+  const entries = [
+    { name: "xl/workbook.xml", content: workbookXml },
+    { name: "xl/_rels/workbook.xml.rels", content: relationshipsXml },
+    ...sheets.map((sheet, index) => ({
+      name: `xl/worksheets/sheet${index + 1}.xml`,
+      content: buildWorksheetXml(sheet.rows)
+    }))
+  ];
+
+  return createStoredZip(entries).toString("base64");
+}
+
+function buildWorksheetXml(rows) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    ${rows.map((cells, rowIndex) => `<row r="${rowIndex + 1}">${cells.map((value, columnIndex) => buildInlineStringCell(columnIndex + 1, rowIndex + 1, value)).join("")}</row>`).join("")}
+  </sheetData>
+</worksheet>`;
+}
+
+function buildInlineStringCell(columnNumber, rowNumber, value) {
+  const reference = `${columnName(columnNumber)}${rowNumber}`;
+  return `<c r="${reference}" t="inlineStr"><is><t>${escapeXml(String(value ?? ""))}</t></is></c>`;
+}
+
+function columnName(columnNumber) {
+  let current = columnNumber;
+  let result = "";
+
+  while (current > 0) {
+    const remainder = (current - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    current = Math.floor((current - 1) / 26);
+  }
+
+  return result;
+}
+
+function createStoredZip(entries) {
+  const localChunks = [];
+  const centralChunks = [];
+  let offset = 0;
+
+  entries.forEach((entry) => {
+    const fileName = Buffer.from(entry.name, "utf8");
+    const content = Buffer.from(entry.content, "utf8");
+    const crc = crc32(content);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0, 12);
+    localHeader.writeUInt32LE(crc, 14);
+    localHeader.writeUInt32LE(content.length, 18);
+    localHeader.writeUInt32LE(content.length, 22);
+    localHeader.writeUInt16LE(fileName.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localChunks.push(localHeader, fileName, content);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0, 14);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(content.length, 20);
+    centralHeader.writeUInt32LE(content.length, 24);
+    centralHeader.writeUInt16LE(fileName.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralChunks.push(centralHeader, fileName);
+
+    offset += localHeader.length + fileName.length + content.length;
+  });
+
+  const centralDirectory = Buffer.concat(centralChunks);
+  const endRecord = Buffer.alloc(22);
+  endRecord.writeUInt32LE(0x06054b50, 0);
+  endRecord.writeUInt16LE(0, 4);
+  endRecord.writeUInt16LE(0, 6);
+  endRecord.writeUInt16LE(entries.length, 8);
+  endRecord.writeUInt16LE(entries.length, 10);
+  endRecord.writeUInt32LE(centralDirectory.length, 12);
+  endRecord.writeUInt32LE(offset, 16);
+  endRecord.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localChunks, centralDirectory, endRecord]);
+}
+
+function crc32(buffer) {
+  let value = 0xffffffff;
+
+  for (const byte of buffer) {
+    value ^= byte;
+    for (let index = 0; index < 8; index += 1) {
+      const mask = -(value & 1);
+      value = (value >>> 1) ^ (0xedb88320 & mask);
+    }
+  }
+
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function escapeXml(value) {
+  return String(value ?? "")
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&apos;");
+}
 
 let failures = 0;
 

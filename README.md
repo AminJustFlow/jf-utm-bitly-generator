@@ -156,6 +156,10 @@ Use Node 22.13.0 or newer when possible. This app uses native `node:sqlite`, whi
 ## Endpoints
 
 - `GET /health`
+- `GET /new`
+  - structured UTM builder UI with taxonomy-backed suggestions and inline result output
+- `POST /new`
+  - JSON endpoint used by the builder UI to create a tracked link through the shared generation pipeline
 - `GET /utms`
   - read-only HTML library of unique tracked links with filters and pagination
 - `GET /utms.json`
@@ -188,7 +192,7 @@ Recommended first-run process:
 - Channel allowlisting is supported.
 - Self-message ignore lists are supported to avoid bot loops.
 - Logs redact common sensitive keys.
-- The UTM library routes use HTTP Basic auth by default.
+- The builder and UTM library routes use HTTP Basic auth by default.
   - Default credentials: `justflow` / `preview`
   - Override them with `LIBRARY_AUTH_USERNAME` and `LIBRARY_AUTH_PASSWORD`
 
@@ -234,6 +238,17 @@ Supported query params:
 - `sort`
 - `page`
 - `per_page`
+
+## Structured Builder
+
+The app also exposes a structured builder at `/new`. It is designed to replace the spreadsheet workflow while keeping the same generation rules:
+
+- choose a client first
+- use client-specific taxonomy suggestions for source, medium, campaign, term, and content
+- optionally choose a channel to prefill defaults
+- generate the tracked URL, Bitly short link, and QR through the same backend pipeline used by ClickUp
+
+If the exact UTM fields are left blank, the builder can still use the campaign label plus the imported client taxonomy to resolve the right combination.
 
 ## Failure Modes
 

@@ -13,6 +13,6 @@ export class RateLimiter {
       since
     );
 
-    return count <= this.limit;
+    return count < this.limit;
   }
 }

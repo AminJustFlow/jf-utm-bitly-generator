@@ -18,9 +18,14 @@ export class HealthController {
     const errors = collectIssues(checks, "errors");
     const warnings = collectIssues(checks, "warnings");
     const statusCode = errors.length > 0 ? 503 : 200;
+    const status = errors.length > 0
+      ? "degraded"
+      : warnings.length > 0
+        ? "warning"
+        : "ok";
 
     return NodeResponse.json({
-      status: errors.length > 0 ? "degraded" : "ok",
+      status,
       timestamp: new Date().toISOString(),
       checks,
       errors,
@@ -58,6 +63,7 @@ export class HealthController {
     const openai = config.openai ?? {};
     const clickup = config.clickup ?? {};
     const bitly = config.bitly ?? {};
+    const libraryAuth = config.libraryAuth ?? {};
     const required = [
       ["OPENAI_API_KEY", openai.apiKey],
       ["OPENAI_MODEL", openai.model],
@@ -116,6 +122,20 @@ export class HealthController {
         message: "Webhook verification bypasses are enabled.",
         bypasses: enabledBypasses
       });
+    }
+
+    if (libraryAuth.enabled) {
+      if (!hasValue(libraryAuth.username) || !hasValue(libraryAuth.password)) {
+        warnings.push({
+          code: "library_auth_unconfigured",
+          message: "Library auth is enabled but the username or password is empty."
+        });
+      } else if (libraryAuth.username === "justflow" && libraryAuth.password === "preview") {
+        warnings.push({
+          code: "library_auth_default_credentials",
+          message: "Library auth is still using the preview credentials."
+        });
+      }
     }
 
     return {

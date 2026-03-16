@@ -142,14 +142,14 @@ export class ClickUpPayloadMapper {
       );
     }
 
-    const deliveryKey = [
-      webhookId.value,
-      messageId.value,
-      channelId.value ?? this.config.defaultChannelId ?? "",
-      crypto.createHash("sha1").update(messageText.value.trim()).digest("hex")
-    ]
-      .filter(Boolean)
-      .join(":");
+    const deliveryKey = buildDeliveryKey({
+      webhookId: webhookId.value,
+      messageId: messageId.value,
+      threadMessageId: threadMessageId.value,
+      channelId: channelId.value ?? this.config.defaultChannelId ?? "",
+      messageText: messageText.value.trim(),
+      rawPayload: payload
+    });
 
     return {
       event: new ClickUpWebhookEvent({
@@ -345,4 +345,50 @@ function isMeaningfulScalar(value) {
   }
 
   return String(value).trim() !== "";
+}
+
+function buildDeliveryKey({
+  webhookId,
+  messageId,
+  threadMessageId,
+  channelId,
+  messageText,
+  rawPayload
+}) {
+  const stableIdentifiers = [webhookId, messageId, threadMessageId].filter(Boolean);
+  const payloadHash = crypto.createHash("sha1")
+    .update(stableStringify(rawPayload))
+    .digest("hex");
+  const trailingHash = stableIdentifiers.length > 0
+    ? crypto.createHash("sha1").update(messageText).digest("hex")
+    : payloadHash;
+
+  return [
+    ...stableIdentifiers,
+    channelId,
+    trailingHash
+  ]
+    .filter(Boolean)
+    .join(":");
+}
+
+function stableStringify(value) {
+  return JSON.stringify(sortValue(value));
+}
+
+function sortValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortValue(entry));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .reduce((accumulator, key) => {
+        accumulator[key] = sortValue(value[key]);
+        return accumulator;
+      }, {});
+  }
+
+  return value;
 }

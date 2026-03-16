@@ -38,7 +38,7 @@ export class ClickUpChatService {
         [contentField]: message
       },
       timeoutMs: this.config.timeoutMs,
-      retries: 2
+      retries: 0
     });
   }
 

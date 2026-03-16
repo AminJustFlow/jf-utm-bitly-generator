@@ -1,4 +1,5 @@
 import { NodeResponse } from "../http/response.js";
+import { renderAppHeader, renderAppShellStyles } from "./app-shell.js";
 
 const SORT_LABELS = {
   recent: "Newest first",
@@ -36,7 +37,7 @@ export class UtmLibraryController {
       highlightRequestId: positiveInteger(request.query.highlight_request_id, null),
       editorOptions: {
         clients: this.rulesService.clients(),
-        channels: this.rulesService.channels()
+        channels: this.rulesService.createChannelCatalog().map((channel) => channel.key)
       }
     };
 
@@ -103,6 +104,41 @@ export class UtmLibraryController {
       })}`
     });
   }
+
+  async handleDelete(request) {
+    const parsedBody = request.parseJson();
+    if (!parsedBody.ok) {
+      return NodeResponse.json({
+        status: "error",
+        error: {
+          code: parsedBody.errorCode,
+          message: parsedBody.errorMessage
+        }
+      }, 400);
+    }
+
+    const result = await this.utmLibraryEditorService.deleteEntry(parsedBody.value);
+    if (!result.ok) {
+      return NodeResponse.json({
+        status: "error",
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      }, result.statusCode ?? 500);
+    }
+
+    return NodeResponse.json({
+      status: "ok",
+      deleted_requests: result.deletedRequests,
+      redirect_url: `/utms?${buildQueryString({
+        toast: result.deletedRequests > 1
+          ? "UTM entry removed. Matching history rows were deleted too."
+          : "UTM entry removed from the library.",
+        toast_level: "success"
+      })}`
+    });
+  }
 }
 
 function renderHtml(view) {
@@ -145,6 +181,7 @@ function renderHtml(view) {
     :root{--bg:#f4efe5;--panel:rgba(255,250,242,.94);--panel-strong:rgba(255,255,255,.86);--ink:#17302a;--muted:#66766f;--accent:#0d6c5e;--accent-dark:#0a5045;--line:rgba(23,48,42,.1);--shadow:0 24px 60px rgba(20,32,31,.09);--warning:#9a6708;--warning-bg:rgba(154,103,8,.12);--danger:#b4432b;--danger-bg:rgba(180,67,43,.12);}
     *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;color:var(--ink);font-family:"Aptos","Segoe UI",sans-serif;background:radial-gradient(circle at top left,rgba(13,108,94,.18),transparent 32rem),radial-gradient(circle at top right,rgba(183,142,65,.12),transparent 26rem),linear-gradient(180deg,#faf7f1 0%,var(--bg) 100%)}
     .shell{max-width:1440px;margin:0 auto;padding:1.4rem 1rem 3rem}
+    ${renderAppShellStyles()}
     .hero,.panel,.card{background:var(--panel);border:1px solid var(--line);border-radius:1.35rem;box-shadow:var(--shadow)}
     .hero,.panel{padding:1rem 1.05rem;margin-bottom:1rem}
     .hero-top,.panel-head,.results-head,.card-head,.pagination{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-end}
@@ -162,8 +199,9 @@ function renderHtml(view) {
     label{display:grid;gap:.35rem;font-size:.9rem;color:var(--muted)}
     input,select{width:100%;padding:.78rem .9rem;border:1px solid rgba(23,48,42,.14);border-radius:.95rem;background:rgba(255,255,255,.86);color:var(--ink);font:inherit}
     input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px rgba(13,108,94,.14);background:#fff}
-    .button,.link-button,.mini-button,.subtle-link,.page-link{display:inline-flex;align-items:center;justify-content:center;min-height:2.8rem;padding:.78rem 1rem;border-radius:999px;border:1px solid var(--line);font:inherit;text-decoration:none;cursor:pointer;background:rgba(255,255,255,.72);color:var(--ink)}
-    .button{background:var(--accent);border-color:transparent;color:#fff;box-shadow:0 12px 24px rgba(13,108,94,.18)} .mini-button,.subtle-link,.page-link{min-height:2.1rem;padding:.42rem .75rem;font-size:.82rem}
+    .button,.link-button,.mini-button,.subtle-link,.page-link,.danger-button{display:inline-flex;align-items:center;justify-content:center;min-height:2.8rem;padding:.78rem 1rem;border-radius:999px;border:1px solid var(--line);font:inherit;text-decoration:none;cursor:pointer;background:rgba(255,255,255,.72);color:var(--ink)}
+    .button{background:var(--accent);border-color:transparent;color:#fff;box-shadow:0 12px 24px rgba(13,108,94,.18)} .mini-button,.subtle-link,.page-link,.danger-button.mini{min-height:2.1rem;padding:.42rem .75rem;font-size:.82rem}
+    .danger-button{background:#fff3f0;border-color:rgba(180,67,43,.22);color:var(--danger)}
     .page-link.current{background:var(--accent);border-color:transparent;color:#fff}
     .grid{display:grid;gap:1rem}
     .card{padding:1rem;display:grid;gap:1rem;scroll-margin-top:1rem;background:linear-gradient(180deg,rgba(255,255,255,.82),rgba(255,249,240,.92))}
@@ -201,6 +239,7 @@ function renderHtml(view) {
 </head>
 <body>
   <main class="shell">
+    ${renderAppHeader("library")}
     <section class="hero">
       <div class="hero-top">
         <div>
@@ -361,6 +400,36 @@ function renderHtml(view) {
           }
         }
       });
+      document.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-delete-request-id]");
+        if (!button) return;
+        event.preventDefault();
+        const requestId = button.getAttribute("data-delete-request-id");
+        if (!requestId) return;
+        if (!window.confirm("Remove this UTM entry from the library? This deletes the saved history for this tracked link.")) {
+          return;
+        }
+        button.disabled = true;
+        try {
+          const response = await fetch("/utms/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ request_id: requestId })
+          });
+          const body = await response.json();
+          if (!response.ok || body.status !== "ok") {
+            const message = body && body.error && body.error.message ? body.error.message : "Unable to remove this UTM entry right now.";
+            showToast(message, "error");
+            return;
+          }
+          window.location.assign(body.redirect_url || "/utms");
+        } catch (error) {
+          const message = error && error.message ? error.message : "Unable to remove this UTM entry right now.";
+          showToast(message, "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
       const highlighted = document.querySelector("[data-highlight='true']");
       if (highlighted) {
         highlighted.scrollIntoView({ block: "start" });
@@ -439,6 +508,7 @@ function renderResultCard(item, { highlightRequestId, editorOptions }) {
         <div class="card-sub">${escapeHtml(subtitleParts.join(" - "))}</div>
       </div>
       <div class="chips">
+        <button type="button" class="danger-button mini" data-delete-request-id="${escapeAttribute(item.requestId)}">Delete Entry</button>
         ${renderChip(item.assetType)}
         ${renderStatusChip(item.status)}
         ${renderChip(item.hasShortUrl ? "Short link ready" : "No short link", item.hasShortUrl ? "default" : "warning")}

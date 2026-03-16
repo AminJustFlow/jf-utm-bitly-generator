@@ -8,7 +8,11 @@ export default {
     timezone: "America/New_York",
     confidenceThreshold: 0.72,
     rateLimit: 20,
-    rateWindowSeconds: 300
+    rateWindowSeconds: 300,
+    recoveryEnabled: true,
+    recoveryPollMs: 30000,
+    recoveryGraceSeconds: 30,
+    recoveryBatchSize: 25
   },
   database: {
     path: "storage/database/app.sqlite"

@@ -8,6 +8,16 @@ export class GeneratedLinkRepository {
       .get({ fingerprint }) ?? null;
   }
 
+  countImportedLinks() {
+    const row = this.database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM generated_links
+      WHERE bitly_payload LIKE '%"imported":true%'
+    `).get();
+
+    return Number(row?.count ?? 0);
+  }
+
   create(payload) {
     const result = this.database.prepare(`
       INSERT INTO generated_links (
@@ -74,5 +84,14 @@ export class GeneratedLinkRepository {
 
     this.database.prepare(`UPDATE generated_links SET ${assignments} WHERE fingerprint = :fingerprint`)
       .run(values);
+  }
+
+  deleteByFingerprint(fingerprint) {
+    const result = this.database.prepare(`
+      DELETE FROM generated_links
+      WHERE fingerprint = :fingerprint
+    `).run({ fingerprint });
+
+    return Number(result.changes ?? 0);
   }
 }

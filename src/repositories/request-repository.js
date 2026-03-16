@@ -17,9 +17,109 @@ export class RequestRepository {
     this.database = database;
   }
 
+  findById(id) {
+    return this.database.prepare("SELECT * FROM requests WHERE id = :id LIMIT 1")
+      .get({ id }) ?? null;
+  }
+
   findByDeliveryKey(deliveryKey) {
     return this.database.prepare("SELECT * FROM requests WHERE delivery_key = :delivery_key LIMIT 1")
       .get({ delivery_key: deliveryKey }) ?? null;
+  }
+
+  findLatestByFingerprint(fingerprint) {
+    return this.database.prepare(`
+      SELECT * FROM requests
+      WHERE fingerprint = :fingerprint
+      ORDER BY id DESC
+      LIMIT 1
+    `).get({ fingerprint }) ?? null;
+  }
+
+  countImportedRequests() {
+    const row = this.database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM requests
+      WHERE source_user_id = 'xlsx_import'
+    `).get();
+
+    return Number(row?.count ?? 0);
+  }
+
+  listImportedFingerprints() {
+    return this.database.prepare(`
+      SELECT DISTINCT fingerprint
+      FROM requests
+      WHERE source_user_id = 'xlsx_import'
+        AND fingerprint IS NOT NULL
+        AND TRIM(fingerprint) <> ''
+    `).all().map((row) => row.fingerprint);
+  }
+
+  deleteImportedRequests() {
+    const result = this.database.prepare(`
+      DELETE FROM requests
+      WHERE source_user_id = 'xlsx_import'
+    `).run();
+
+    return Number(result.changes ?? 0);
+  }
+
+  countByFingerprint(fingerprint) {
+    const row = this.database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM requests
+      WHERE fingerprint = :fingerprint
+    `).get({ fingerprint });
+
+    return Number(row?.count ?? 0);
+  }
+
+  deleteByFingerprint(fingerprint) {
+    const result = this.database.prepare(`
+      DELETE FROM requests
+      WHERE fingerprint = :fingerprint
+    `).run({ fingerprint });
+
+    return Number(result.changes ?? 0);
+  }
+
+  deleteByRequestUuid(requestUuid) {
+    const result = this.database.prepare(`
+      DELETE FROM requests
+      WHERE request_uuid = :request_uuid
+    `).run({ request_uuid: requestUuid });
+
+    return Number(result.changes ?? 0);
+  }
+
+  listReceivedBefore(beforeIso, limit = 25) {
+    return this.database.prepare(`
+      SELECT * FROM requests
+      WHERE status = 'received'
+        AND created_at <= :before
+      ORDER BY created_at ASC, id ASC
+      LIMIT :limit
+    `).all({
+      before: beforeIso,
+      limit
+    });
+  }
+
+  claimRecovery(id, nextStatus = "recovering") {
+    const result = this.database.prepare(`
+      UPDATE requests
+      SET status = :next_status,
+          updated_at = :updated_at
+      WHERE id = :id
+        AND status = 'received'
+    `).run({
+      id,
+      next_status: nextStatus,
+      updated_at: new Date().toISOString()
+    });
+
+    return Number(result.changes ?? 0) > 0;
   }
 
   createIncoming(payload) {
