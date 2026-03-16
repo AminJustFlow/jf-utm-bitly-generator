@@ -301,8 +301,8 @@ export class RulesService {
       clients: this.clients().map((client) => ({
         key: client,
         aliases: this.rules.clients[client].aliases ?? [],
-        utm_defaults: this.rules.clients[client].utmDefaults ?? {},
-        taxonomy: this.getClientTaxonomy(client)
+        display_name: this.getClientDisplayName(client),
+        domains: this.rules.clients[client].domains ?? []
       })),
       channels: this.channels().map((channel) => ({
         key: channel,
@@ -311,6 +311,19 @@ export class RulesService {
         utm_defaults: this.rules.channels?.[channel]?.utmDefaults ?? this.sourceChannels[channel]?.utmDefaults ?? {}
       })),
       asset_types: this.assetTypes()
+    };
+  }
+
+  buildParserContext(message = "") {
+    const text = String(message ?? "");
+    const destinationUrl = extractFirstUrl(text);
+    const likelyClient = this.findLikelyClientFromMessage(text, destinationUrl);
+    const likelyChannel = this.findLikelyChannelFromMessage(text);
+
+    return {
+      summary: this.summarizeForParser(),
+      likely_client: likelyClient ? this.buildFocusedClientParserContext(likelyClient, likelyChannel) : null,
+      likely_channel: likelyChannel ? this.buildFocusedChannelParserContext(likelyChannel) : null
     };
   }
 
@@ -532,6 +545,80 @@ export class RulesService {
     }
 
     return null;
+  }
+
+  buildFocusedClientParserContext(client, likelyChannel = null) {
+    const taxonomy = normalizeFormTaxonomy(this.getClientTaxonomy(client));
+    const sourceMediumHint = likelyChannel ? this.getSourceMedium(likelyChannel) : null;
+    let combinations = taxonomy.combinations
+      .filter((entry) => Object.values(entry).some((value) => String(value ?? "").trim() !== ""));
+
+    if (sourceMediumHint?.source) {
+      const filtered = combinations.filter((entry) => normalizeComparable(entry.source) === normalizeComparable(sourceMediumHint.source));
+      if (filtered.length > 0) {
+        combinations = filtered;
+      }
+    }
+
+    if (sourceMediumHint?.medium) {
+      const filtered = combinations.filter((entry) => normalizeComparable(entry.medium) === normalizeComparable(sourceMediumHint.medium));
+      if (filtered.length > 0) {
+        combinations = filtered;
+      }
+    }
+
+    return {
+      key: client,
+      display_name: this.getClientDisplayName(client),
+      domains: [...(this.rules.clients?.[client]?.domains ?? [])].slice(0, 8),
+      likely_channel: likelyChannel ? this.buildFocusedChannelParserContext(likelyChannel) : null,
+      approved_values: {
+        sources: taxonomy.sources.filter(Boolean).slice(0, 40),
+        mediums: taxonomy.mediums.filter(Boolean).slice(0, 20),
+        campaigns: taxonomy.campaigns.filter(Boolean).slice(0, 40),
+        terms: taxonomy.terms.filter((value) => value !== "").slice(0, 40),
+        contents: taxonomy.contents.filter((value) => value !== "").slice(0, 40)
+      },
+      common_combinations: combinations.slice(0, 40),
+      combination_count: combinations.length
+    };
+  }
+
+  buildFocusedChannelParserContext(channel) {
+    return {
+      key: channel,
+      display_name: this.getChannelDisplayName(channel),
+      asset_type: this.normalizeAssetType(null, channel, { medium: this.getSourceMedium(channel)?.medium ?? null }) ?? null,
+      utm_defaults: this.rules.channels?.[channel]?.utmDefaults ?? this.sourceChannels[channel]?.utmDefaults ?? {}
+    };
+  }
+
+  findLikelyClientFromMessage(message, destinationUrl = null) {
+    const fromUrl = this.normalizeClient(null, destinationUrl);
+    if (fromUrl) {
+      return fromUrl;
+    }
+
+    return findMessageEntityKey(String(message ?? ""), this.clients().map((client) => ({
+      key: client,
+      terms: [
+        client,
+        this.getClientDisplayName(client),
+        ...(this.rules.clients?.[client]?.aliases ?? [])
+      ]
+    })));
+  }
+
+  findLikelyChannelFromMessage(message) {
+    return findMessageEntityKey(String(message ?? ""), this.channels().map((channel) => ({
+      key: channel,
+      terms: [
+        channel,
+        this.getChannelDisplayName(channel),
+        ...this.channelAliases(channel),
+        this.getSourceMedium(channel)?.source ?? ""
+      ]
+    })));
   }
 }
 
@@ -882,6 +969,88 @@ function findBestAliasKey(value, items) {
   }
 
   return candidates.find((candidate) => normalizeComparable(candidate.term) === bestTerm)?.key ?? null;
+}
+
+function findMessageEntityKey(message, entities) {
+  const text = String(message ?? "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const candidates = [];
+  for (const entity of entities) {
+    for (const term of entity.terms ?? []) {
+      const normalizedTerm = String(term ?? "").trim();
+      if (!normalizedTerm) {
+        continue;
+      }
+
+      candidates.push({
+        key: entity.key,
+        term: normalizedTerm,
+        weight: normalizeComparable(normalizedTerm).length
+      });
+    }
+  }
+
+  candidates.sort((left, right) => right.weight - left.weight);
+
+  for (const candidate of candidates) {
+    const pattern = new RegExp(`\\b${escapeRegExp(candidate.term.replaceAll("_", " "))}\\b`, "iu");
+    if (pattern.test(text)) {
+      return candidate.key;
+    }
+  }
+
+  const words = text.toLowerCase().match(/[a-z0-9']+/gu) ?? [];
+  let best = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let duplicateBest = false;
+
+  for (const candidate of candidates) {
+    const comparable = normalizeComparable(candidate.term);
+    if (comparable.length < 3) {
+      continue;
+    }
+
+    const candidateWords = candidate.term.toLowerCase().match(/[a-z0-9']+/gu) ?? [];
+    const width = Math.max(1, candidateWords.length);
+
+    for (let index = 0; index <= words.length - width; index += 1) {
+      const phrase = words.slice(index, index + width).join(" ");
+      const distance = levenshtein(normalizeComparable(phrase), comparable);
+      const maxDistance = comparable.length >= 8 ? 2 : 1;
+      if (distance > maxDistance) {
+        continue;
+      }
+
+      if (!best || distance < bestDistance || (distance === bestDistance && candidate.weight > best.weight)) {
+        best = candidate;
+        bestDistance = distance;
+        duplicateBest = false;
+        continue;
+      }
+
+      if (distance === bestDistance && candidate.key !== best.key && candidate.weight === best.weight) {
+        duplicateBest = true;
+      }
+    }
+  }
+
+  if (!best || duplicateBest) {
+    return null;
+  }
+
+  return best.key;
+}
+
+function extractFirstUrl(value) {
+  const match = String(value ?? "").match(/https?:\/\/\S+/iu);
+  return match ? match[0].replace(/[.,)]$/u, "") : null;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function normalizeComparable(value) {

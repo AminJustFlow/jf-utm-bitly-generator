@@ -12,7 +12,31 @@ export class OpenAIParserService {
       throw new Error("OPENAI_API_KEY is not configured.");
     }
 
-    const summary = this.rulesService.summarizeForParser();
+    const parserContext = this.rulesService.buildParserContext(message);
+    const promptLines = [
+      "You are a parser for JF marketing link requests.",
+      "Return JSON only that matches the provided schema.",
+      "Never invent unsupported clients or channels.",
+      "If a value is ambiguous or unsupported, leave the field null, add a warning, and include the field name in missing_fields.",
+      "Correct obvious spelling mistakes in client names, channel names, campaign_label, and explicit UTM values when there is one clear correction.",
+      "If there is not one clear correction, lower confidence and ask for clarification through warnings instead of guessing.",
+      "Preserve approved workbook-style UTM values exactly, including case, when they are implied by the request or clearly match the likely client taxonomy.",
+      "Use exact approved source, medium, campaign, term, and content values when one client-specific combination is clearly implied.",
+      "If the request only gives a plain-language campaign and the taxonomy does not clearly resolve the final UTM values, set campaign_label and leave unresolved utm_* fields null.",
+      "Only set needs_qr=true if the user explicitly requests QR, flyer, print, brochure, postcard, or offline use.",
+      `Supported clients and aliases: ${JSON.stringify(parserContext.summary.clients)}`,
+      `Supported channels and aliases: ${JSON.stringify(parserContext.summary.channels)}`,
+      `Supported asset types: ${JSON.stringify(parserContext.summary.asset_types)}`
+    ];
+
+    if (parserContext.likely_client) {
+      promptLines.push(`Likely client context: ${JSON.stringify(parserContext.likely_client)}`);
+    }
+
+    if (parserContext.likely_channel) {
+      promptLines.push(`Likely channel context: ${JSON.stringify(parserContext.likely_channel)}`);
+    }
+
     const payload = {
       model: this.config.model,
       temperature: this.config.temperature ?? 0.1,
@@ -22,20 +46,7 @@ export class OpenAIParserService {
           content: [
             {
               type: "input_text",
-              text: [
-                "You are a parser for JF marketing link requests.",
-                "Return JSON only that matches the provided schema.",
-                "Never invent unsupported clients or channels.",
-                "If a value is ambiguous or unsupported, leave the field null if allowed, add a warning, and include the field name in missing_fields.",
-                "Correct obvious spelling mistakes in client names, channel names, and campaign_label when there is one clear correction.",
-                "If campaign text is unclear and there is not one clear correction, lower confidence and ask for clarification through warnings instead of guessing.",
-                "Use utm_source, utm_medium, utm_campaign, utm_term, and utm_content only when the user explicitly provides those values or clearly requests a house-style override.",
-                "Use campaign_label for a plain-language campaign name when the request implies one but does not explicitly specify a final utm_campaign value.",
-                `Supported clients and aliases: ${JSON.stringify(summary.clients)}`,
-                `Supported channels and aliases: ${JSON.stringify(summary.channels)}`,
-                `Supported asset types: ${JSON.stringify(summary.asset_types)}`,
-                "Only set needs_qr=true if the user explicitly requests QR, flyer, print, brochure, postcard, or offline use."
-              ].join("\n")
+              text: promptLines.join("\n")
             }
           ]
         },
@@ -58,7 +69,7 @@ export class OpenAIParserService {
             type: "object",
             additionalProperties: false,
             properties: {
-              client: { type: "string" },
+              client: { type: ["string", "null"] },
               channel: { type: ["string", "null"] },
               asset_type: { type: ["string", "null"], enum: ["social", "email", "pr", "offline", "paid", "owned", null] },
               campaign_label: { type: ["string", "null"] },
@@ -67,7 +78,7 @@ export class OpenAIParserService {
               utm_campaign: { type: ["string", "null"] },
               utm_term: { type: ["string", "null"] },
               utm_content: { type: ["string", "null"] },
-              destination_url: { type: "string" },
+              destination_url: { type: ["string", "null"] },
               needs_qr: { type: "boolean" },
               confidence: { type: "number" },
               warnings: {

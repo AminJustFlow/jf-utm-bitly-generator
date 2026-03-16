@@ -17,6 +17,7 @@ import { ClickUpPayloadMapper } from "../src/services/clickup-payload-mapper.js"
 import { WebhookVerifier } from "../src/services/webhook-verifier.js";
 import { HeuristicParser } from "../src/services/heuristic-parser.js";
 import { FallbackCommandParser } from "../src/services/fallback-command-parser.js";
+import { OpenAIParserService } from "../src/services/openai-parser-service.js";
 import { LinkGenerationService } from "../src/services/link-generation-service.js";
 import { LinkWorkflowService } from "../src/services/link-workflow-service.js";
 import { MessageFormatter } from "../src/services/message-formatter.js";
@@ -290,6 +291,76 @@ const tests = [
       assert.equal(parsed.channel, "instagram");
       assert.equal(decision.status, "ready");
       assert.equal(decision.normalizedRequest.utmCampaign, "spring_sale");
+    }
+  },
+  {
+    name: "rules service builds focused parser context for the likely client",
+    run() {
+      const context = rulesService.buildParserContext("Need a LinkedIn contact link for Just Flow to https://justflownh.com/#!/contactus");
+
+      assert.equal(context.likely_client?.key, "jf");
+      assert.equal(context.likely_channel?.key, "linkedin");
+      assert.ok(context.likely_client?.approved_values?.sources.includes("LinkedIn"));
+      assert.ok(context.likely_client?.common_combinations?.some((entry) => entry.source === "LinkedIn" && entry.medium === "Social"));
+    }
+  },
+  {
+    name: "openai parser uses focused taxonomy context and nullable schema fields",
+    async run() {
+      const calls = [];
+      const parser = new OpenAIParserService({
+        async request(method, url, options) {
+          calls.push({ method, url, options });
+          return {
+            statusCode: 200,
+            json() {
+              return {
+                id: "resp_123",
+                model: "gpt-4.1-mini-2025-04-14",
+                output_text: JSON.stringify({
+                  client: null,
+                  channel: "linkedin",
+                  asset_type: "social",
+                  campaign_label: "contact",
+                  utm_source: null,
+                  utm_medium: null,
+                  utm_campaign: null,
+                  utm_term: null,
+                  utm_content: null,
+                  destination_url: "https://justflownh.com/#!/contactus",
+                  needs_qr: false,
+                  confidence: 0.61,
+                  warnings: ["Client was ambiguous."],
+                  missing_fields: ["client"]
+                })
+              };
+            }
+          };
+        }
+      }, {
+        apiKey: "sk-test",
+        model: "gpt-4.1-mini",
+        apiBase: "https://api.openai.com/v1",
+        temperature: 0.1,
+        timeoutMs: 5000
+      }, rulesService);
+
+      const parsed = await parser.parse("Need a LinkedIn contact link for Just Flow to https://justflownh.com/#!/contactus");
+
+      assert.equal(parsed.client, null);
+      assert.equal(parsed.channel, "linkedin");
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].method, "POST");
+      assert.match(calls[0].url, /\/responses$/iu);
+
+      const payload = calls[0].options.json;
+      const prompt = payload.input[0].content[0].text;
+      assert.match(prompt, /Likely client context:/iu);
+      assert.match(prompt, /"key":"jf"/iu);
+      assert.match(prompt, /"approved_values"/iu);
+      assert.match(prompt, /"common_combinations"/iu);
+      assert.deepEqual(payload.text.format.schema.properties.client.type, ["string", "null"]);
+      assert.deepEqual(payload.text.format.schema.properties.destination_url.type, ["string", "null"]);
     }
   },
   {
